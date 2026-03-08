@@ -1,11 +1,11 @@
 """
 Stunning animated visualizations for VLM Safety Circuit Analysis.
 
-Creates publication-quality GIFs and static figures that show:
-1. Safety circuit activation flowing through transformer layers
-2. Layer-by-layer refusal direction buildup
-3. Compression impact on safety circuits
-4. Cross-model circuit comparison
+Creates publication-quality GIFs and static figures:
+1. Neural circuit board — safety components light up like a chip
+2. Flowing heatmap — activation scores ripple through layers
+3. Compression battle — circuit-aware vs blind pruning animated radar
+4. Summary dashboard — beautiful 6-panel overview
 
 Requirements: matplotlib, numpy, imageio, PIL
 """
@@ -21,80 +21,63 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import matplotlib.patheffects as pe
-from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.colors import LinearSegmentedColormap, to_rgba
+from matplotlib.collections import LineCollection
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image as PILImage
 
 
 # ---------------------------------------------------------------------------
-# Color palettes
+# Color palette — neon cyberpunk on dark
 # ---------------------------------------------------------------------------
 
-# Custom colormaps
-SAFETY_CMAP = LinearSegmentedColormap.from_list(
-    "safety", ["#0d1117", "#161b22", "#1a3a5c", "#1f6feb", "#58a6ff", "#79c0ff"]
+BG_DARK = "#0a0e17"
+BG_PANEL = "#0f1923"
+GRID_DIM = "#1a2332"
+NEON_BLUE = "#00d4ff"
+NEON_CYAN = "#00ffd4"
+NEON_GREEN = "#39ff14"
+NEON_PINK = "#ff006e"
+NEON_ORANGE = "#ff6b35"
+NEON_PURPLE = "#bf5af2"
+TEXT_WHITE = "#e8eaed"
+TEXT_DIM = "#6b7b8d"
+ACCENT_GOLD = "#ffd700"
+
+CIRCUIT_CMAP = LinearSegmentedColormap.from_list(
+    "circuit", [BG_DARK, "#0a1628", "#0d2847", "#1565c0", "#42a5f5",
+                NEON_CYAN, NEON_GREEN, ACCENT_GOLD]
 )
 DANGER_CMAP = LinearSegmentedColormap.from_list(
-    "danger", ["#0d1117", "#21262d", "#6e3b1e", "#da3633", "#f85149", "#ff7b72"]
+    "danger", [BG_DARK, "#1a0a0a", "#4a1010", "#c62828", "#ef5350",
+               NEON_PINK, NEON_ORANGE]
 )
-CIRCUIT_CMAP = LinearSegmentedColormap.from_list(
-    "circuit", ["#0d1117", "#0e2a47", "#1a5276", "#2980b9", "#48c9b0", "#2ecc71", "#f1c40f"]
-)
-DIVERGENCE_CMAP = LinearSegmentedColormap.from_list(
-    "divergence", ["#0d1117", "#1a1a2e", "#16213e", "#533483", "#e94560", "#f85149"]
+FLOW_CMAP = LinearSegmentedColormap.from_list(
+    "flow", ["#000428", "#004e92", NEON_BLUE, NEON_CYAN, "#ffffff"]
 )
 
 
-def load_results(results_dir: str):
-    """Load all experiment results."""
-    data = {}
-    results_path = Path(results_dir)
-
-    for f in results_path.glob("*.json"):
-        data[f.stem] = json.load(open(f))
-
-    for f in results_path.glob("*.pt"):
-        import torch
-        data[f.stem] = torch.load(f, map_location="cpu", weights_only=True)
-
-    return data
+def _style_ax(ax, title="", title_color=NEON_BLUE):
+    """Dark neon axis styling."""
+    ax.set_facecolor(BG_PANEL)
+    ax.tick_params(colors=TEXT_DIM, labelsize=7)
+    for spine in ax.spines.values():
+        spine.set_color(GRID_DIM)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    if title:
+        ax.set_title(title, fontsize=12, fontweight="bold",
+                      color=title_color, pad=10)
 
 
-# ---------------------------------------------------------------------------
-# 1. SAFETY CIRCUIT ACTIVATION GIF
-# ---------------------------------------------------------------------------
-
-def create_circuit_activation_gif(results_dir: str, output_dir: str,
-                                   model_tag: str = "llava-1.5-7b-hf"):
-    """
-    Animated GIF showing safety-critical components lighting up layer by layer.
-    Looks like a neural circuit with electricity flowing through it.
-    """
-    patching_file = Path(results_dir) / f"patching_{model_tag}.json"
-    if not patching_file.exists():
-        print(f"  Skipping circuit GIF: {patching_file} not found")
-        return
-
-    with open(patching_file) as f:
-        data = json.load(f)
-
-    # Compute per-component average recovery scores
-    scores = {}
-    for exp in data:
-        for r in exp["results"]:
-            scores.setdefault(r["component"], []).append(r["recovery_score"])
-    avg_scores = {k: np.mean(v) for k, v in scores.items()}
-
-    # Parse into layers
+def _parse_layer_scores(avg_scores):
+    """Parse component scores into layer_data dict and max_layer."""
     layer_data = {}
-    special_components = {}
+    special = {}
     max_layer = 0
-
     for comp, score in avg_scores.items():
         parts = comp.split("_")
-        # Find layer number
         layer_num = None
-        comp_type = None
         for i, p in enumerate(parts):
             if p == "layer" and i + 1 < len(parts) and parts[i + 1].isdigit():
                 layer_num = int(parts[i + 1])
@@ -103,330 +86,397 @@ def create_circuit_activation_gif(results_dir: str, output_dir: str,
                 if prefix:
                     comp_type = f"{prefix}_{comp_type}"
                 break
-
         if layer_num is not None:
             layer_data.setdefault(layer_num, {})[comp_type] = score
             max_layer = max(max_layer, layer_num)
         else:
-            special_components[comp] = score
+            special[comp] = score
+    return layer_data, special, max_layer
 
+
+def _load_patching(results_dir, model_tag):
+    """Load patching results and compute avg scores."""
+    # Try multiple possible filenames
+    for pattern in [f"patching_{model_tag}.json",
+                    f"patching_{model_tag}_text_counterfactual.json"]:
+        path = Path(results_dir) / pattern
+        if path.exists():
+            with open(path) as f:
+                data = json.load(f)
+            break
+    else:
+        return None, None
+
+    scores = {}
+    for exp in data:
+        for r in exp["results"]:
+            scores.setdefault(r["component"], []).append(r["recovery_score"])
+    avg = {k: np.mean(v) for k, v in scores.items()}
+    return data, avg
+
+
+# ---------------------------------------------------------------------------
+# 1. NEURAL CIRCUIT BOARD GIF
+# ---------------------------------------------------------------------------
+
+def create_circuit_board_gif(results_dir, output_dir, model_tag="llava-1.5-7b-hf"):
+    """
+    Animated GIF: transformer layers as a circuit board.
+    Each layer is a row of nodes (attn, mlp). Connections glow as
+    activation flows from input to output. Safety-critical components
+    pulse with neon energy.
+    """
+    data, avg_scores = _load_patching(results_dir, model_tag)
+    if avg_scores is None:
+        print(f"  Skip circuit board: no patching data for {model_tag}")
+        return
+
+    layer_data, special, max_layer = _parse_layer_scores(avg_scores)
     n_layers = max_layer + 1
 
-    # Determine component types present
     all_types = set()
     for ld in layer_data.values():
         all_types.update(ld.keys())
     comp_types = sorted(all_types)
     n_types = len(comp_types)
 
-    # Normalize scores for visualization
-    all_scores = list(avg_scores.values())
-    score_max = max(abs(s) for s in all_scores) if all_scores else 1.0
+    score_max = max(abs(s) for s in avg_scores.values()) if avg_scores else 1.0
 
-    # Create frames
+    # Node positions
+    fig_w, fig_h = 16, 9
+    dpi = 120
+
+    # Layout constants
+    x_margin = 0.12
+    y_margin = 0.08
+    x_range = 1.0 - 2 * x_margin
+    y_range = 0.80
+    y_top = 0.90
+
+    type_colors = {
+        "attn": NEON_BLUE,
+        "mlp": NEON_GREEN,
+        "crossattn": NEON_PURPLE,
+        "enc_attn": NEON_BLUE,
+        "enc_mlp": NEON_GREEN,
+        "enc_crossattn": NEON_PURPLE,
+        "dec_attn": NEON_CYAN,
+        "dec_mlp": NEON_ORANGE,
+        "dec_crossattn": NEON_PINK,
+    }
+
     frames = []
-    n_frames = n_layers + 15  # extra frames at end to hold final state
+    # Phase 1: Energy flows through layers (n_layers frames)
+    # Phase 2: Hold final glow (8 frames)
+    # Phase 3: Pulse effect on top components (8 frames)
+    total_frames = n_layers + 16
 
-    fig_w, fig_h = 14, 8
-    dpi = 100
-
-    for frame_idx in range(n_frames):
+    for frame_idx in range(total_frames):
         fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=dpi)
-        fig.patch.set_facecolor("#0d1117")
-        ax.set_facecolor("#0d1117")
-
-        active_layer = min(frame_idx, n_layers - 1)
-
-        # Title
-        ax.text(0.5, 0.97, f"Safety Circuit Activation — {model_tag}",
-                transform=ax.transAxes, ha="center", va="top",
-                fontsize=18, fontweight="bold", color="white",
-                path_effects=[pe.withStroke(linewidth=2, foreground="#1f6feb")])
-
-        ax.text(0.5, 0.93, f"Layer {active_layer}/{n_layers - 1}  |  "
-                f"Recovery score = how much this component contributes to safety behavior",
-                transform=ax.transAxes, ha="center", va="top",
-                fontsize=10, color="#8b949e")
-
-        # Layout: vertical stack of layers, each layer has component blocks
-        margin_x = 0.08
-        margin_y = 0.08
-        plot_w = 1.0 - 2 * margin_x
-        plot_h = 0.82
-
-        layer_height = plot_h / n_layers
-        block_width = plot_w / max(n_types, 1)
-
-        for layer_idx in range(n_layers):
-            y = margin_y + (n_layers - 1 - layer_idx) * layer_height
-            ld = layer_data.get(layer_idx, {})
-
-            for type_idx, ctype in enumerate(comp_types):
-                x = margin_x + type_idx * block_width
-                score = ld.get(ctype, 0.0)
-                norm_score = score / score_max if score_max > 0 else 0
-
-                # Determine color intensity based on whether this layer is "active"
-                if layer_idx <= active_layer:
-                    # Already activated — show full color
-                    if layer_idx == active_layer and frame_idx < n_layers:
-                        # Currently activating — bright glow
-                        alpha = min(1.0, abs(norm_score) * 2 + 0.3)
-                        if norm_score > 0.1:
-                            color = CIRCUIT_CMAP(min(1.0, norm_score * 1.5 + 0.3))
-                        elif norm_score < -0.05:
-                            color = DANGER_CMAP(min(1.0, abs(norm_score) * 1.5 + 0.3))
-                        else:
-                            color = (0.15, 0.17, 0.20, 0.6)
-                        # Add glow effect
-                        glow = mpatches.FancyBboxPatch(
-                            (x + 0.003, y + 0.002),
-                            block_width - 0.006, layer_height - 0.006,
-                            boxstyle="round,pad=0.002",
-                            facecolor=color[:3] if len(color) >= 3 else color,
-                            alpha=0.3, edgecolor="none",
-                            transform=ax.transAxes,
-                        )
-                        ax.add_patch(glow)
-                    else:
-                        # Previously activated
-                        alpha = min(0.9, abs(norm_score) * 1.5 + 0.15)
-                        if norm_score > 0.1:
-                            color = CIRCUIT_CMAP(min(1.0, norm_score + 0.2))
-                        elif norm_score < -0.05:
-                            color = DANGER_CMAP(min(1.0, abs(norm_score) + 0.2))
-                        else:
-                            color = (0.12, 0.14, 0.17, 0.4)
-                else:
-                    # Not yet activated — dim
-                    alpha = 0.08
-                    color = (0.15, 0.17, 0.20, alpha)
-
-                rect = mpatches.FancyBboxPatch(
-                    (x + 0.002, y + 0.001),
-                    block_width - 0.004, layer_height - 0.003,
-                    boxstyle="round,pad=0.001",
-                    facecolor=color[:3] if isinstance(color, tuple) and len(color) >= 3 else color,
-                    alpha=alpha if isinstance(color, tuple) else 0.8,
-                    edgecolor="#30363d" if layer_idx <= active_layer else "#21262d",
-                    linewidth=0.5,
-                    transform=ax.transAxes,
-                )
-                ax.add_patch(rect)
-
-                # Score text for active layers with significant scores
-                if layer_idx <= active_layer and abs(norm_score) > 0.15:
-                    ax.text(x + block_width / 2, y + layer_height / 2,
-                            f"{score:.2f}",
-                            transform=ax.transAxes, ha="center", va="center",
-                            fontsize=6, color="white", fontweight="bold",
-                            alpha=min(1.0, abs(norm_score) * 2 + 0.3))
-
-        # Layer labels (left side)
-        for layer_idx in range(n_layers):
-            y = margin_y + (n_layers - 1 - layer_idx) * layer_height
-            label_alpha = 1.0 if layer_idx <= active_layer else 0.3
-            ax.text(margin_x - 0.01, y + layer_height / 2,
-                    f"L{layer_idx}", transform=ax.transAxes,
-                    ha="right", va="center", fontsize=6,
-                    color="white", alpha=label_alpha)
-
-        # Component type labels (top)
-        for type_idx, ctype in enumerate(comp_types):
-            x = margin_x + type_idx * block_width
-            label = ctype.replace("_", "\n")
-            ax.text(x + block_width / 2, margin_y + n_layers * layer_height + 0.01,
-                    label, transform=ax.transAxes, ha="center", va="bottom",
-                    fontsize=7, color="#58a6ff", fontweight="bold")
-
-        # Special components (projector, etc.) on the right
-        if special_components:
-            sx = 0.92
-            sy = 0.5
-            ax.text(sx, sy + 0.08, "Special", transform=ax.transAxes,
-                    ha="center", va="bottom", fontsize=8, color="#58a6ff",
-                    fontweight="bold")
-            for i, (comp, score) in enumerate(sorted(
-                    special_components.items(), key=lambda x: -x[1])):
-                norm_s = score / score_max
-                c = CIRCUIT_CMAP(min(1.0, norm_s + 0.3)) if frame_idx >= 2 else (0.15, 0.17, 0.20)
-                al = 0.9 if frame_idx >= 2 else 0.1
-                rect = mpatches.FancyBboxPatch(
-                    (sx - 0.03, sy - i * 0.06 - 0.02), 0.06, 0.04,
-                    boxstyle="round,pad=0.005",
-                    facecolor=c[:3] if isinstance(c, tuple) else c,
-                    alpha=al, edgecolor="#58a6ff", linewidth=1,
-                    transform=ax.transAxes,
-                )
-                ax.add_patch(rect)
-                ax.text(sx, sy - i * 0.06, f"{comp}\n{score:.3f}",
-                        transform=ax.transAxes, ha="center", va="center",
-                        fontsize=6, color="white", fontweight="bold",
-                        alpha=al)
-
+        fig.patch.set_facecolor(BG_DARK)
+        ax.set_facecolor(BG_DARK)
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
         ax.axis("off")
 
+        active_layer = min(frame_idx, n_layers - 1)
+        is_hold = frame_idx >= n_layers
+        pulse_phase = (frame_idx - n_layers) / 8.0 if is_hold else 0
+
+        # Title with glow
+        ax.text(0.5, 0.97, f"Safety Circuit Architecture — {model_tag}",
+                ha="center", va="top", fontsize=20, fontweight="bold",
+                color=TEXT_WHITE, transform=ax.transAxes,
+                path_effects=[pe.withStroke(linewidth=3, foreground=NEON_BLUE)])
+
+        # Subtitle
+        if not is_hold:
+            subtitle = f"Layer {active_layer}/{n_layers-1} activating..."
+        else:
+            subtitle = f"All {n_layers} layers active  |  {len(avg_scores)} components analyzed"
+        ax.text(0.5, 0.935, subtitle,
+                ha="center", va="top", fontsize=11, color=TEXT_DIM,
+                transform=ax.transAxes)
+
+        # Column headers
+        for ti, ctype in enumerate(comp_types):
+            x = x_margin + (ti + 0.5) * x_range / n_types
+            ax.text(x, y_top + 0.015, ctype.upper(),
+                    ha="center", va="bottom", fontsize=8,
+                    color=type_colors.get(ctype, TEXT_DIM), fontweight="bold",
+                    transform=ax.transAxes)
+
+        # Draw connections (vertical lines between layers)
+        for ti in range(n_types):
+            x = x_margin + (ti + 0.5) * x_range / n_types
+            for li in range(n_layers - 1):
+                y1 = y_top - li * (y_range / n_layers) - y_range / n_layers * 0.3
+                y2 = y_top - (li + 1) * (y_range / n_layers) + y_range / n_layers * 0.3
+                if li < active_layer:
+                    alpha = 0.15
+                    color = type_colors.get(comp_types[ti], TEXT_DIM)
+                elif li == active_layer - 1 and not is_hold:
+                    alpha = 0.5
+                    color = type_colors.get(comp_types[ti], TEXT_DIM)
+                else:
+                    alpha = 0.03
+                    color = GRID_DIM
+                ax.plot([x, x], [y1, y2], color=color, alpha=alpha,
+                        linewidth=1.0, transform=ax.transAxes)
+
+        # Draw nodes
+        for li in range(n_layers):
+            ld = layer_data.get(li, {})
+            y_center = y_top - (li + 0.5) * y_range / n_layers
+
+            for ti, ctype in enumerate(comp_types):
+                x_center = x_margin + (ti + 0.5) * x_range / n_types
+                score = ld.get(ctype, 0.0)
+                norm_score = abs(score) / score_max if score_max > 0 else 0
+
+                base_color = type_colors.get(ctype, NEON_BLUE)
+
+                if li <= active_layer:
+                    # Active node
+                    if li == active_layer and not is_hold:
+                        # Currently activating — bright pulse
+                        glow_size = 0.018 + norm_score * 0.02
+                        node_alpha = 0.5 + norm_score * 0.5
+                        # Outer glow
+                        glow = plt.Circle((x_center, y_center), glow_size * 1.8,
+                                          color=base_color, alpha=node_alpha * 0.2,
+                                          transform=ax.transAxes, zorder=2)
+                        ax.add_patch(glow)
+                    else:
+                        glow_size = 0.012 + norm_score * 0.015
+                        node_alpha = 0.3 + norm_score * 0.6
+
+                    # Pulse effect on hold phase for top components
+                    if is_hold and norm_score > 0.3:
+                        pulse_boost = 0.3 * math.sin(pulse_phase * math.pi + ti * 0.5)
+                        glow_size += pulse_boost * 0.008
+                        node_alpha = min(1.0, node_alpha + pulse_boost * 0.2)
+
+                    # Node circle
+                    rgba = to_rgba(base_color, node_alpha)
+                    node = plt.Circle((x_center, y_center), glow_size,
+                                      color=rgba[:3], alpha=rgba[3],
+                                      transform=ax.transAxes, zorder=3)
+                    ax.add_patch(node)
+
+                    # Inner bright core
+                    if norm_score > 0.2:
+                        core = plt.Circle((x_center, y_center), glow_size * 0.4,
+                                          color="white", alpha=min(0.8, norm_score),
+                                          transform=ax.transAxes, zorder=4)
+                        ax.add_patch(core)
+
+                    # Score text for significant nodes
+                    if norm_score > 0.25:
+                        ax.text(x_center, y_center - glow_size - 0.008,
+                                f"{score:.3f}",
+                                ha="center", va="top", fontsize=5,
+                                color=base_color, alpha=0.8,
+                                transform=ax.transAxes, fontweight="bold")
+                else:
+                    # Inactive — dim dot
+                    node = plt.Circle((x_center, y_center), 0.006,
+                                      color=GRID_DIM, alpha=0.2,
+                                      transform=ax.transAxes, zorder=2)
+                    ax.add_patch(node)
+
+            # Layer label
+            label_alpha = 0.9 if li <= active_layer else 0.15
+            ax.text(x_margin - 0.02, y_center, f"L{li}",
+                    ha="right", va="center", fontsize=6,
+                    color=TEXT_DIM, alpha=label_alpha,
+                    transform=ax.transAxes, fontweight="bold")
+
+        # Projector node (special component)
+        if "projector" in special:
+            proj_score = special["projector"]
+            proj_norm = abs(proj_score) / score_max
+            proj_y = y_margin - 0.01
+            proj_x = 0.5
+            proj_active = is_hold or active_layer >= n_layers - 1
+
+            if proj_active:
+                proj_size = 0.025 + proj_norm * 0.015
+                ax.add_patch(plt.Circle((proj_x, proj_y), proj_size * 1.5,
+                                         color=NEON_CYAN, alpha=0.15,
+                                         transform=ax.transAxes, zorder=2))
+                ax.add_patch(plt.Circle((proj_x, proj_y), proj_size,
+                                         color=NEON_CYAN, alpha=0.6,
+                                         transform=ax.transAxes, zorder=3))
+                ax.text(proj_x, proj_y + 0.04,
+                        f"PROJECTOR ({proj_score:.3f})",
+                        ha="center", fontsize=8, color=NEON_CYAN,
+                        fontweight="bold", transform=ax.transAxes)
+            else:
+                ax.add_patch(plt.Circle((proj_x, proj_y), 0.015,
+                                         color=GRID_DIM, alpha=0.2,
+                                         transform=ax.transAxes, zorder=2))
+                ax.text(proj_x, proj_y + 0.03, "PROJECTOR",
+                        ha="center", fontsize=8, color=TEXT_DIM,
+                        alpha=0.3, transform=ax.transAxes)
+
+        # Legend
+        legend_y = 0.03
+        for i, (ctype, color) in enumerate(type_colors.items()):
+            if ctype in comp_types:
+                lx = 0.02 + i * 0.12
+                ax.add_patch(plt.Circle((lx, legend_y), 0.006,
+                                         color=color, alpha=0.8,
+                                         transform=ax.transAxes))
+                ax.text(lx + 0.012, legend_y, ctype,
+                        ha="left", va="center", fontsize=7,
+                        color=color, alpha=0.7, transform=ax.transAxes)
+
         fig.canvas.draw()
         w, h = fig.canvas.get_width_height()
         buf = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8).reshape(h, w, 4)
         frames.append(buf[:, :, :3].copy())
         plt.close(fig)
 
-    # Save GIF
     os.makedirs(output_dir, exist_ok=True)
-    gif_path = os.path.join(output_dir, f"safety_circuit_activation_{model_tag}.gif")
-    imageio.mimsave(gif_path, frames, fps=4, loop=0)
-    print(f"  Saved: {gif_path}")
+    gif_path = os.path.join(output_dir, f"circuit_board_{model_tag}.gif")
+    imageio.mimsave(gif_path, frames, fps=6, loop=0)
+    print(f"  Saved: {gif_path} ({len(frames)} frames)")
     return gif_path
 
 
 # ---------------------------------------------------------------------------
-# 2. REFUSAL DIRECTION BUILDUP GIF
+# 2. FLOWING HEATMAP GIF
 # ---------------------------------------------------------------------------
 
-def create_refusal_direction_gif(results_dir: str, output_dir: str,
-                                  model_tag: str = "llava-1.5-7b-hf"):
+def create_flowing_heatmap_gif(results_dir, output_dir, model_tag="llava-1.5-7b-hf"):
     """
-    Animated bar chart showing refusal direction norms building up through layers.
-    Like an equalizer visualization.
+    Animated heatmap: a wave of activation flows from early to late layers.
+    Shows the recovery score as an energy field across the network.
     """
-    rd_file = Path(results_dir) / f"refusal_direction_{model_tag}.json"
-    if not rd_file.exists():
-        print(f"  Skipping refusal GIF: {rd_file} not found")
+    data, avg_scores = _load_patching(results_dir, model_tag)
+    if avg_scores is None:
+        print(f"  Skip heatmap: no patching data for {model_tag}")
         return
 
-    with open(rd_file) as f:
-        rd_data = json.load(f)
+    layer_data, _, max_layer = _parse_layer_scores(avg_scores)
+    n_layers = max_layer + 1
 
-    norms = rd_data["direction_norms"]
-    # Sort by layer number
-    layer_items = []
-    for k, v in norms.items():
-        num = int(k.split("_")[-1]) if k.split("_")[-1].isdigit() else 0
-        prefix = k.rsplit("_", 1)[0] if "_" in k else ""
-        layer_items.append((num, prefix, k, v))
-    layer_items.sort(key=lambda x: (x[1], x[0]))
+    all_types = set()
+    for ld in layer_data.values():
+        all_types.update(ld.keys())
+    comp_types = sorted(all_types)
 
-    layer_names = [item[2] for item in layer_items]
-    layer_norms = [item[3] for item in layer_items]
-    n = len(layer_names)
+    # Build 2D matrix
+    matrix = np.zeros((len(comp_types), n_layers))
+    for li in range(n_layers):
+        for ti, ct in enumerate(comp_types):
+            matrix[ti, li] = layer_data.get(li, {}).get(ct, 0.0)
 
-    max_norm = max(layer_norms) * 1.15
+    # Normalize
+    abs_max = max(np.abs(matrix).max(), 1e-6)
 
     frames = []
-    n_frames = n + 12
+    n_frames = 60
+
+    fig_w, fig_h = 14, 6
+    dpi = 120
 
     for frame_idx in range(n_frames):
-        fig, ax = plt.subplots(figsize=(14, 6), dpi=100)
-        fig.patch.set_facecolor("#0d1117")
-        ax.set_facecolor("#0d1117")
+        t = frame_idx / (n_frames - 1)  # 0 → 1
 
-        active = min(frame_idx, n)
+        fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=dpi)
+        fig.patch.set_facecolor(BG_DARK)
+        ax.set_facecolor(BG_DARK)
 
-        # Draw bars
-        bars_x = np.arange(n)
-        bar_heights = []
-        bar_colors = []
+        # Create masked matrix — wave front sweeps across
+        wave_pos = t * (n_layers + 10)  # wave position in layer units
+        display = np.zeros_like(matrix)
 
-        for i in range(n):
-            if i < active:
-                h = layer_norms[i]
-                # Color based on norm magnitude
-                t = h / max_norm
-                if t > 0.7:
-                    color = "#f85149"  # hot red
-                elif t > 0.4:
-                    color = "#f0883e"  # orange
-                elif t > 0.2:
-                    color = "#58a6ff"  # blue
-                else:
-                    color = "#388bfd"  # dim blue
-            elif i == active and frame_idx < n:
-                # Currently appearing — flash white
-                h = layer_norms[i]
-                color = "#ffffff"
+        for li in range(n_layers):
+            # Gaussian envelope around wave front
+            dist = li - wave_pos
+            # Show everything behind the wave, dim things far ahead
+            if dist < 0:
+                # Behind wave — fully revealed
+                envelope = 1.0
+            elif dist < 5:
+                # At wave front — bright glow
+                envelope = np.exp(-0.5 * (dist / 1.5) ** 2)
             else:
-                h = 0
-                color = "#21262d"
+                # Ahead of wave — barely visible
+                envelope = 0.02
 
-            bar_heights.append(h)
-            bar_colors.append(color)
+            display[:, li] = matrix[:, li] * envelope
 
-        bars = ax.bar(bars_x, bar_heights, color=bar_colors, width=0.75,
-                      edgecolor="#30363d", linewidth=0.5)
+        # Plot heatmap with custom colormap
+        im = ax.imshow(display, aspect="auto", cmap=CIRCUIT_CMAP,
+                        vmin=-abs_max * 0.2, vmax=abs_max,
+                        interpolation="bilinear")
 
-        # Add glow to current bar
-        if frame_idx < n:
-            idx = min(frame_idx, n - 1)
-            bars[idx].set_edgecolor("#ffffff")
-            bars[idx].set_linewidth(2)
+        # Wave front indicator
+        if 0 <= wave_pos < n_layers:
+            ax.axvline(x=wave_pos, color=NEON_CYAN, alpha=0.6,
+                       linewidth=2, linestyle="--")
 
-        # Styling
-        ax.set_xlim(-0.5, n - 0.5)
-        ax.set_ylim(0, max_norm)
-        ax.set_xticks(bars_x)
-        ax.set_xticklabels([ln.replace("_", "\n") for ln in layer_names],
-                           fontsize=6, color="#8b949e", rotation=0)
-        ax.tick_params(axis="y", colors="#8b949e", labelsize=8)
-        ax.spines["bottom"].set_color("#30363d")
-        ax.spines["left"].set_color("#30363d")
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
+        # Labels
+        ax.set_yticks(range(len(comp_types)))
+        ax.set_yticklabels(comp_types, fontsize=9, color=TEXT_WHITE)
 
-        ax.set_title(f"Refusal Direction Norm by Layer — {model_tag}",
-                     fontsize=16, fontweight="bold", color="white", pad=15,
-                     path_effects=[pe.withStroke(linewidth=1, foreground="#1f6feb")])
-        ax.set_ylabel("Direction Norm", fontsize=11, color="#c9d1d9")
-        ax.set_xlabel("Layer", fontsize=11, color="#c9d1d9")
+        # X-axis: show every 5th layer
+        step = max(1, n_layers // 15)
+        ax.set_xticks(range(0, n_layers, step))
+        ax.set_xticklabels([str(i) for i in range(0, n_layers, step)],
+                           fontsize=8, color=TEXT_DIM)
+        ax.set_xlabel("Layer", fontsize=10, color=TEXT_DIM)
 
-        # Annotation for current layer
-        if frame_idx < n:
-            idx = min(frame_idx, n - 1)
-            ax.annotate(f"{layer_norms[idx]:.2f}",
-                        xy=(idx, layer_norms[idx]),
-                        xytext=(idx, layer_norms[idx] + max_norm * 0.05),
-                        fontsize=10, color="white", fontweight="bold",
-                        ha="center", va="bottom")
+        # Title
+        ax.text(0.5, 1.08, f"Safety Recovery Score — {model_tag}",
+                ha="center", va="bottom", fontsize=18, fontweight="bold",
+                color=TEXT_WHITE, transform=ax.transAxes,
+                path_effects=[pe.withStroke(linewidth=2, foreground=NEON_BLUE)])
 
-        # Add "higher = more safety-relevant" annotation
-        if active > n // 2:
-            ax.text(0.98, 0.95, "Higher norm = stronger\nsafety direction",
-                    transform=ax.transAxes, ha="right", va="top",
-                    fontsize=9, color="#8b949e", style="italic",
-                    bbox=dict(boxstyle="round,pad=0.4", facecolor="#161b22",
-                              edgecolor="#30363d", alpha=0.9))
+        pct = min(100, int(t * 100))
+        ax.text(0.5, 1.02, f"Scanning layers... {pct}%",
+                ha="center", va="bottom", fontsize=10, color=NEON_CYAN,
+                transform=ax.transAxes, alpha=0.8)
 
-        plt.tight_layout()
+        for spine in ax.spines.values():
+            spine.set_color(GRID_DIM)
+        ax.tick_params(colors=TEXT_DIM)
+
+        plt.tight_layout(rect=[0, 0, 1, 0.95])
         fig.canvas.draw()
         w, h = fig.canvas.get_width_height()
         buf = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8).reshape(h, w, 4)
         frames.append(buf[:, :, :3].copy())
         plt.close(fig)
 
+    # Hold final
+    for _ in range(15):
+        frames.append(frames[-1])
+
     os.makedirs(output_dir, exist_ok=True)
-    gif_path = os.path.join(output_dir, f"refusal_direction_buildup_{model_tag}.gif")
-    imageio.mimsave(gif_path, frames, fps=5, loop=0)
-    print(f"  Saved: {gif_path}")
+    gif_path = os.path.join(output_dir, f"flowing_heatmap_{model_tag}.gif")
+    imageio.mimsave(gif_path, frames, fps=10, loop=0)
+    print(f"  Saved: {gif_path} ({len(frames)} frames)")
     return gif_path
 
 
 # ---------------------------------------------------------------------------
-# 3. COMPRESSION IMPACT GIF
+# 3. COMPRESSION BATTLE GIF — Radar chart
 # ---------------------------------------------------------------------------
 
-def create_compression_impact_gif(results_dir: str, output_dir: str,
-                                   model_tag: str = "llava-1.5-7b-hf"):
+def create_compression_radar_gif(results_dir, output_dir, model_tag="llava-1.5-7b-hf"):
     """
-    Animated visualization: model components fade/dim as sparsity increases.
-    Circuit-aware pruning keeps safety nodes bright while blind pruning dims everything.
+    Animated radar chart: as sparsity increases, the radar polygon shrinks.
+    Circuit-aware pruning keeps the safety arms strong; blind pruning collapses them.
     """
     comp_file = Path(results_dir) / f"compression_{model_tag}.json"
     patch_file = Path(results_dir) / f"patching_{model_tag}.json"
 
     if not comp_file.exists() or not patch_file.exists():
-        print(f"  Skipping compression GIF: missing files")
+        print(f"  Skip radar: missing files for {model_tag}")
         return
 
     with open(comp_file) as f:
@@ -434,17 +484,23 @@ def create_compression_impact_gif(results_dir: str, output_dir: str,
     with open(patch_file) as f:
         patch_data = json.load(f)
 
-    # Get component importance
+    # Get top components for radar axes
     scores = {}
     for exp in patch_data:
         for r in exp["results"]:
             scores.setdefault(r["component"], []).append(r["recovery_score"])
     avg_scores = {k: np.mean(v) for k, v in scores.items()}
-
-    # Sort by importance
     sorted_comps = sorted(avg_scores.items(), key=lambda x: x[1], reverse=True)
-    top_n = min(30, len(sorted_comps))
-    display_comps = sorted_comps[:top_n]
+
+    # Pick 8 representative components for radar
+    n_axes = min(8, len(sorted_comps))
+    radar_comps = sorted_comps[:n_axes]
+    radar_names = [c.replace("layer_", "L") for c, _ in radar_comps]
+    radar_base_scores = [s for _, s in radar_comps]
+    score_max = max(radar_base_scores) if radar_base_scores else 1.0
+
+    # Classify safety-critical
+    safety_threshold = n_axes // 3  # top third are "safety"
 
     # Extract compression results
     methods = {}
@@ -452,147 +508,247 @@ def create_compression_impact_gif(results_dir: str, output_dir: str,
         if method_name == "original":
             continue
         for r in results_list:
-            sparsity = r.get("actual_sparsity", r.get("target_sparsity", 0))
+            sp = r.get("actual_sparsity", r.get("target_sparsity", 0))
             safety = r.get("safety", {}).get("avg_refusal_score", 0)
             entropy = r.get("performance", {}).get("avg_entropy", 0)
             methods.setdefault(method_name, []).append({
-                "sparsity": sparsity, "safety": safety, "entropy": entropy
+                "sparsity": sp, "safety": safety, "entropy": entropy
             })
 
-    # Create comparison: circuit-aware vs uniform at each sparsity
-    sparsity_levels = [0.0, 0.3, 0.5, 0.7]
-    score_max = max(s for _, s in display_comps) if display_comps else 1
-
     frames = []
+    sparsity_levels = np.linspace(0, 0.7, 40)
+    dpi = 120
 
-    for sp_idx, target_sp in enumerate(sparsity_levels):
-        # Generate multiple frames per sparsity level (smooth transition)
-        n_transition = 8 if sp_idx > 0 else 4
+    for sp in sparsity_levels:
+        fig, ax = plt.subplots(figsize=(10, 10), dpi=dpi,
+                                subplot_kw=dict(projection="polar"))
+        fig.patch.set_facecolor(BG_DARK)
+        ax.set_facecolor(BG_DARK)
 
-        for t_frame in range(n_transition):
-            t = t_frame / max(n_transition - 1, 1)  # 0 to 1
+        angles = np.linspace(0, 2 * np.pi, n_axes, endpoint=False).tolist()
+        angles += angles[:1]  # close the polygon
 
-            fig, axes = plt.subplots(1, 2, figsize=(16, 8), dpi=100)
-            fig.patch.set_facecolor("#0d1117")
+        # Compute values for each method at this sparsity
+        for method_name, color, label in [
+            ("circuit_aware", NEON_GREEN, "Circuit-Aware"),
+            ("uniform_magnitude", NEON_PINK, "Blind Pruning"),
+        ]:
+            values = []
+            for i, (comp, base_score) in enumerate(radar_comps):
+                is_safety = i < safety_threshold
+                normalized = base_score / score_max
 
-            for ax_idx, (method_label, prune_fn) in enumerate([
-                ("Circuit-Aware Pruning", "circuit_aware"),
-                ("Uniform Magnitude Pruning", "uniform")
-            ]):
-                ax = axes[ax_idx]
-                ax.set_facecolor("#0d1117")
-
-                names = []
-                bar_vals = []
-                bar_colors = []
-
-                safety_threshold_rank = int(top_n * 0.3)  # top 30% are "safety"
-
-                for rank, (comp, score) in enumerate(display_comps):
-                    is_safety = rank < safety_threshold_rank
-                    norm_score = score / score_max
-
-                    if target_sp == 0:
-                        # Original — all bright
-                        val = norm_score
-                        if is_safety:
-                            color = "#2ecc71"  # green
-                        else:
-                            color = "#3498db"  # blue
+                if method_name == "circuit_aware":
+                    if is_safety:
+                        # Protected — barely affected
+                        val = normalized * (1.0 - sp * 0.15)
                     else:
-                        if prune_fn == "circuit_aware" and is_safety:
-                            # Protected — stays bright
-                            val = norm_score * (1.0 - target_sp * 0.1 * t)
-                            color = "#2ecc71"
-                        elif prune_fn == "circuit_aware":
-                            # Non-safety pruned harder
-                            val = norm_score * (1.0 - target_sp * 1.5 * t)
-                            val = max(val, 0.02)
-                            color = "#e74c3c" if val < norm_score * 0.3 else "#e67e22"
-                        else:
-                            # Uniform — everything pruned equally
-                            val = norm_score * (1.0 - target_sp * t)
-                            val = max(val, 0.02)
-                            if is_safety:
-                                color = "#e74c3c"  # red — safety being destroyed
-                            else:
-                                color = "#e67e22"  # orange
+                        # Aggressively pruned
+                        val = normalized * (1.0 - sp * 1.8)
+                        val = max(val, 0.05)
+                else:
+                    # Uniform — everything equally damaged
+                    val = normalized * (1.0 - sp * 1.0)
+                    val = max(val, 0.05)
 
-                    names.append(comp.replace("layer_", "L").replace("_", "\n"))
-                    bar_vals.append(val)
-                    bar_colors.append(color)
+                values.append(val)
 
-                x_pos = np.arange(top_n)
-                ax.barh(x_pos, bar_vals, color=bar_colors, height=0.7,
-                        edgecolor="#30363d", linewidth=0.3)
+            values += values[:1]  # close polygon
 
-                ax.set_yticks(x_pos)
-                ax.set_yticklabels(names, fontsize=5, color="#c9d1d9")
-                ax.set_xlim(0, 1.1)
-                ax.invert_yaxis()
-                ax.tick_params(axis="x", colors="#8b949e", labelsize=7)
-                ax.spines["bottom"].set_color("#30363d")
-                ax.spines["left"].set_color("#30363d")
-                ax.spines["top"].set_visible(False)
-                ax.spines["right"].set_visible(False)
+            ax.plot(angles, values, "o-", color=color, linewidth=2.5,
+                    markersize=6, label=label, alpha=0.9)
+            ax.fill(angles, values, color=color, alpha=0.12)
 
-                current_sp = target_sp * t if sp_idx > 0 else 0
-                ax.set_title(f"{method_label}\nSparsity: {current_sp:.0%}",
-                             fontsize=12, fontweight="bold", color="white", pad=10)
+        # Original baseline (dashed)
+        orig_vals = [s / score_max for _, s in radar_comps]
+        orig_vals += orig_vals[:1]
+        ax.plot(angles, orig_vals, "--", color=TEXT_DIM, linewidth=1.5,
+                alpha=0.4, label="Original")
 
-            # Add legend
-            legend_elements = [
-                mpatches.Patch(facecolor="#2ecc71", label="Safety-critical (protected)"),
-                mpatches.Patch(facecolor="#3498db", label="Non-critical"),
-                mpatches.Patch(facecolor="#e74c3c", label="Pruned / Damaged"),
-            ]
-            fig.legend(handles=legend_elements, loc="lower center", ncol=3,
-                       fontsize=9, frameon=True, facecolor="#161b22",
-                       edgecolor="#30363d", labelcolor="white")
+        # Styling
+        ax.set_xticks(angles[:-1])
+        ax.set_xticklabels(radar_names, fontsize=9, color=TEXT_WHITE)
+        ax.set_rlabel_position(30)
+        ax.tick_params(colors=TEXT_DIM)
+        ax.grid(color=GRID_DIM, alpha=0.3)
+        ax.set_ylim(0, 1.1)
 
-            fig.suptitle(f"Compression Impact on Safety Components — {model_tag}",
-                         fontsize=16, fontweight="bold", color="white", y=0.98,
-                         path_effects=[pe.withStroke(linewidth=1, foreground="#1f6feb")])
+        # Legend
+        legend = ax.legend(loc="upper right", bbox_to_anchor=(1.25, 1.15),
+                           fontsize=10, facecolor=BG_PANEL,
+                           edgecolor=GRID_DIM, labelcolor=TEXT_WHITE)
 
-            plt.tight_layout(rect=[0, 0.05, 1, 0.95])
-            fig.canvas.draw()
-            w, h = fig.canvas.get_width_height()
-            buf = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8).reshape(h, w, 4)
-            frames.append(buf[:, :, :3].copy())
-            plt.close(fig)
+        # Title
+        fig.suptitle(f"Compression Impact on Safety Components",
+                     fontsize=18, fontweight="bold", color=TEXT_WHITE, y=0.98,
+                     path_effects=[pe.withStroke(linewidth=2, foreground=NEON_BLUE)])
+        ax.set_title(f"Sparsity: {sp:.0%}", fontsize=14, color=NEON_CYAN,
+                     pad=25)
 
-    # Hold final frame
-    for _ in range(10):
+        # Model tag
+        fig.text(0.5, 0.02, model_tag, ha="center", fontsize=10,
+                 color=TEXT_DIM)
+
+        plt.tight_layout(rect=[0, 0.03, 0.95, 0.95])
+        fig.canvas.draw()
+        w, h = fig.canvas.get_width_height()
+        buf = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8).reshape(h, w, 4)
+        frames.append(buf[:, :, :3].copy())
+        plt.close(fig)
+
+    # Hold final
+    for _ in range(15):
         frames.append(frames[-1])
 
     os.makedirs(output_dir, exist_ok=True)
-    gif_path = os.path.join(output_dir, f"compression_impact_{model_tag}.gif")
-    imageio.mimsave(gif_path, frames, fps=4, loop=0)
-    print(f"  Saved: {gif_path}")
+    gif_path = os.path.join(output_dir, f"compression_radar_{model_tag}.gif")
+    imageio.mimsave(gif_path, frames, fps=8, loop=0)
+    print(f"  Saved: {gif_path} ({len(frames)} frames)")
     return gif_path
 
 
 # ---------------------------------------------------------------------------
-# 4. STATIC: Beautiful summary dashboard
+# 4. REFUSAL DIRECTION BUILDUP GIF
 # ---------------------------------------------------------------------------
 
-def create_summary_dashboard(results_dir: str, output_dir: str,
-                              model_tag: str = "llava-1.5-7b-hf"):
+def create_refusal_direction_gif(results_dir, output_dir, model_tag="llava-1.5-7b-hf"):
     """
-    Single high-res figure summarizing all findings.
-    Publication-quality, dark theme.
+    Animated equalizer: refusal direction norms build up layer by layer.
     """
-    patch_file = Path(results_dir) / f"patching_{model_tag}.json"
     rd_file = Path(results_dir) / f"refusal_direction_{model_tag}.json"
-
-    if not patch_file.exists():
-        print(f"  Skipping dashboard: {patch_file} not found")
+    if not rd_file.exists():
+        print(f"  Skip refusal GIF: {rd_file} not found")
         return
 
+    with open(rd_file) as f:
+        rd_data = json.load(f)
+
+    norms = rd_data.get("direction_norms", {})
+    if not norms:
+        print(f"  Skip refusal GIF: no direction norms")
+        return
+
+    # Sort by layer index
+    items = sorted(norms.items(),
+                   key=lambda x: int(x[0].split("_")[-1])
+                   if x[0].split("_")[-1].isdigit() else 0)
+    labels = [k for k, _ in items]
+    values = np.array([v for _, v in items])
+    n_bars = len(values)
+    val_max = values.max() if len(values) > 0 else 1.0
+
+    frames = []
+    n_anim_frames = n_bars + 20  # reveal bars one by one + hold
+    dpi = 120
+
+    for frame_idx in range(n_anim_frames):
+        fig, ax = plt.subplots(figsize=(14, 6), dpi=dpi)
+        fig.patch.set_facecolor(BG_DARK)
+        ax.set_facecolor(BG_DARK)
+
+        active_bars = min(frame_idx + 1, n_bars)
+        is_hold = frame_idx >= n_bars
+
+        # Draw bars
+        x_pos = np.arange(n_bars)
+        bar_heights = np.zeros(n_bars)
+        bar_colors = []
+
+        for i in range(n_bars):
+            if i < active_bars:
+                bar_heights[i] = values[i]
+                # Color by magnitude
+                norm_val = values[i] / val_max
+                if i == active_bars - 1 and not is_hold:
+                    # Currently revealing — bright neon
+                    bar_colors.append(to_rgba(NEON_CYAN, 0.9))
+                else:
+                    bar_colors.append(DANGER_CMAP(min(1.0, norm_val * 0.8 + 0.2)))
+            else:
+                bar_heights[i] = 0
+                bar_colors.append(to_rgba(GRID_DIM, 0.1))
+
+        bars = ax.bar(x_pos, bar_heights, width=0.7, color=bar_colors,
+                      edgecolor=GRID_DIM, linewidth=0.3)
+
+        # Glow on current bar
+        if not is_hold and active_bars > 0:
+            curr = active_bars - 1
+            ax.bar([curr], [bar_heights[curr]], width=0.9,
+                   color=NEON_CYAN, alpha=0.15)
+
+        # Pulse effect during hold
+        if is_hold:
+            pulse = 0.5 * (1 + math.sin(frame_idx * 0.3))
+            peak_idx = np.argmax(values)
+            ax.bar([peak_idx], [values[peak_idx]], width=0.9,
+                   color=NEON_PINK, alpha=0.1 + 0.1 * pulse)
+
+        # Peak marker
+        if active_bars >= n_bars:
+            peak_idx = np.argmax(values)
+            ax.annotate(f"Peak: {values[peak_idx]:.3f}",
+                        xy=(peak_idx, values[peak_idx]),
+                        xytext=(peak_idx + 2, values[peak_idx] * 1.1),
+                        fontsize=10, color=NEON_PINK, fontweight="bold",
+                        arrowprops=dict(arrowstyle="->", color=NEON_PINK,
+                                        lw=1.5))
+
+        # Axis styling
+        step = max(1, n_bars // 15)
+        ax.set_xticks(range(0, n_bars, step))
+        ax.set_xticklabels([labels[i] for i in range(0, n_bars, step)],
+                           rotation=45, fontsize=7, color=TEXT_DIM, ha="right")
+        ax.set_ylabel("Direction Norm", fontsize=10, color=TEXT_DIM)
+        ax.set_ylim(0, val_max * 1.25)
+
+        _style_ax(ax)
+
+        # Title
+        fig.suptitle(f"Refusal Direction Strength — {model_tag}",
+                     fontsize=18, fontweight="bold", color=TEXT_WHITE, y=0.98,
+                     path_effects=[pe.withStroke(linewidth=2, foreground=NEON_PINK)])
+
+        pct = min(100, int(active_bars / n_bars * 100))
+        fig.text(0.5, 0.92, f"Scanning layer activations... {pct}%",
+                 ha="center", fontsize=10, color=NEON_CYAN, alpha=0.7)
+
+        plt.tight_layout(rect=[0, 0, 1, 0.90])
+        fig.canvas.draw()
+        w, h = fig.canvas.get_width_height()
+        buf = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8).reshape(h, w, 4)
+        frames.append(buf[:, :, :3].copy())
+        plt.close(fig)
+
+    os.makedirs(output_dir, exist_ok=True)
+    gif_path = os.path.join(output_dir, f"refusal_direction_{model_tag}.gif")
+    imageio.mimsave(gif_path, frames, fps=8, loop=0)
+    print(f"  Saved: {gif_path} ({len(frames)} frames)")
+    return gif_path
+
+
+# ---------------------------------------------------------------------------
+# 5. COMPRESSION IMPACT BAR RACE GIF
+# ---------------------------------------------------------------------------
+
+def create_compression_bar_race(results_dir, output_dir, model_tag="llava-1.5-7b-hf"):
+    """
+    Bar chart race: as sparsity increases, bars animate showing how
+    circuit-aware preserves safety while blind pruning destroys it.
+    """
+    comp_file = Path(results_dir) / f"compression_{model_tag}.json"
+    patch_file = Path(results_dir) / f"patching_{model_tag}.json"
+
+    if not comp_file.exists() or not patch_file.exists():
+        print(f"  Skip bar race: missing files for {model_tag}")
+        return
+
+    with open(comp_file) as f:
+        comp_data = json.load(f)
     with open(patch_file) as f:
         patch_data = json.load(f)
 
-    # Compute rankings
+    # Component importance
     scores = {}
     for exp in patch_data:
         for r in exp["results"]:
@@ -600,177 +756,267 @@ def create_summary_dashboard(results_dir: str, output_dir: str,
     avg_scores = {k: np.mean(v) for k, v in scores.items()}
     sorted_comps = sorted(avg_scores.items(), key=lambda x: x[1], reverse=True)
 
-    # Create figure
-    fig = plt.figure(figsize=(20, 12), dpi=150)
-    fig.patch.set_facecolor("#0d1117")
+    top_n = min(20, len(sorted_comps))
+    display_comps = sorted_comps[:top_n]
+    score_max = max(s for _, s in display_comps)
+    safety_thresh = top_n // 3
 
-    # Grid layout
+    frames = []
+    sparsity_levels = np.concatenate([
+        np.linspace(0, 0.3, 10),
+        np.linspace(0.3, 0.5, 10),
+        np.linspace(0.5, 0.7, 15),
+    ])
+    dpi = 120
+
+    for sp in sparsity_levels:
+        fig, axes = plt.subplots(1, 2, figsize=(18, 9), dpi=dpi)
+        fig.patch.set_facecolor(BG_DARK)
+
+        for ax_idx, (method, color_safe, color_pruned, title) in enumerate([
+            ("circuit_aware", NEON_GREEN, NEON_ORANGE, "Circuit-Aware Pruning"),
+            ("uniform", NEON_PINK, "#ff2d55", "Blind Uniform Pruning"),
+        ]):
+            ax = axes[ax_idx]
+            ax.set_facecolor(BG_PANEL)
+
+            bar_vals = []
+            bar_colors = []
+            bar_labels = []
+
+            for rank, (comp, base_score) in enumerate(display_comps):
+                is_safety = rank < safety_thresh
+                norm = base_score / score_max
+
+                if sp == 0:
+                    val = norm
+                    c = NEON_GREEN if is_safety else NEON_BLUE
+                elif method == "circuit_aware" and is_safety:
+                    val = norm * (1.0 - sp * 0.1)
+                    c = color_safe
+                elif method == "circuit_aware":
+                    val = norm * max(0.05, 1.0 - sp * 1.6)
+                    c = color_pruned
+                else:
+                    val = norm * max(0.05, 1.0 - sp * 1.1)
+                    c = color_pruned if is_safety else NEON_ORANGE
+
+                bar_vals.append(val)
+                bar_colors.append(c)
+                short_name = comp.replace("layer_", "L")
+                tag = " *" if is_safety else ""
+                bar_labels.append(f"{short_name}{tag}")
+
+            y_pos = np.arange(top_n)
+            ax.barh(y_pos, bar_vals, color=bar_colors, height=0.65,
+                    edgecolor=GRID_DIM, linewidth=0.3)
+
+            ax.set_yticks(y_pos)
+            ax.set_yticklabels(bar_labels, fontsize=7, color=TEXT_WHITE)
+            ax.set_xlim(0, 1.15)
+            ax.invert_yaxis()
+
+            _style_ax(ax, title=title,
+                      title_color=NEON_GREEN if ax_idx == 0 else NEON_PINK)
+
+            # Sparsity indicator
+            ax.text(0.95, 0.95, f"{sp:.0%}",
+                    ha="right", va="top", fontsize=28,
+                    color=NEON_CYAN, fontweight="bold", alpha=0.3,
+                    transform=ax.transAxes)
+
+        # Legend
+        legend_patches = [
+            mpatches.Patch(facecolor=NEON_GREEN, label="Safety-Critical (protected)"),
+            mpatches.Patch(facecolor=NEON_BLUE, label="Non-critical"),
+            mpatches.Patch(facecolor=NEON_PINK, label="Damaged by pruning"),
+        ]
+        fig.legend(handles=legend_patches, loc="lower center", ncol=3,
+                   fontsize=10, facecolor=BG_PANEL, edgecolor=GRID_DIM,
+                   labelcolor=TEXT_WHITE)
+
+        fig.suptitle(f"Compression Impact — {model_tag}",
+                     fontsize=20, fontweight="bold", color=TEXT_WHITE, y=0.98,
+                     path_effects=[pe.withStroke(linewidth=2, foreground=NEON_BLUE)])
+        fig.text(0.5, 0.94, f"Sparsity: {sp:.0%}  |  * = safety-critical component",
+                 ha="center", fontsize=11, color=NEON_CYAN)
+
+        plt.tight_layout(rect=[0, 0.05, 1, 0.92])
+        fig.canvas.draw()
+        w, h = fig.canvas.get_width_height()
+        buf = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8).reshape(h, w, 4)
+        frames.append(buf[:, :, :3].copy())
+        plt.close(fig)
+
+    # Hold final
+    for _ in range(15):
+        frames.append(frames[-1])
+
+    os.makedirs(output_dir, exist_ok=True)
+    gif_path = os.path.join(output_dir, f"compression_battle_{model_tag}.gif")
+    imageio.mimsave(gif_path, frames, fps=6, loop=0)
+    print(f"  Saved: {gif_path} ({len(frames)} frames)")
+    return gif_path
+
+
+# ---------------------------------------------------------------------------
+# 6. SUMMARY DASHBOARD (static)
+# ---------------------------------------------------------------------------
+
+def create_summary_dashboard(results_dir, output_dir, model_tag="llava-1.5-7b-hf"):
+    """High-resolution 6-panel summary figure. Publication-quality dark theme."""
+    data, avg_scores = _load_patching(results_dir, model_tag)
+    if avg_scores is None:
+        print(f"  Skip dashboard: no patching data for {model_tag}")
+        return
+
+    layer_data, special, max_layer = _parse_layer_scores(avg_scores)
+    n_layers = max_layer + 1
+    sorted_comps = sorted(avg_scores.items(), key=lambda x: x[1], reverse=True)
+
+    all_types = set()
+    for ld in layer_data.values():
+        all_types.update(ld.keys())
+    comp_types = sorted(all_types)
+
+    fig = plt.figure(figsize=(22, 14), dpi=150)
+    fig.patch.set_facecolor(BG_DARK)
     gs = fig.add_gridspec(2, 3, hspace=0.35, wspace=0.3,
-                          left=0.06, right=0.97, top=0.92, bottom=0.06)
+                          left=0.05, right=0.97, top=0.92, bottom=0.05)
 
-    # Panel 1: Top safety components (horizontal bar)
+    # ---- Panel 1: Top components bar chart ----
     ax1 = fig.add_subplot(gs[0, 0])
-    ax1.set_facecolor("#0d1117")
     top_20 = sorted_comps[:20]
     names = [c.replace("layer_", "L") for c, _ in top_20]
     vals = [s for _, s in top_20]
-    colors = [CIRCUIT_CMAP(min(1.0, v / max(vals) + 0.2)) for v in vals]
+    vmax = max(vals) if vals else 1
+    colors = [CIRCUIT_CMAP(min(1.0, v / vmax * 0.7 + 0.3)) for v in vals]
 
     ax1.barh(range(len(names)), vals, color=colors, height=0.7,
-             edgecolor="#30363d", linewidth=0.3)
+             edgecolor=GRID_DIM, linewidth=0.3)
     ax1.set_yticks(range(len(names)))
-    ax1.set_yticklabels(names, fontsize=7, color="#c9d1d9")
+    ax1.set_yticklabels(names, fontsize=7, color=TEXT_WHITE)
     ax1.invert_yaxis()
-    ax1.set_xlabel("Recovery Score", fontsize=9, color="#c9d1d9")
-    ax1.set_title("Top Safety Components", fontsize=12, fontweight="bold",
-                   color="#58a6ff", pad=10)
-    _style_ax(ax1)
+    ax1.set_xlabel("Recovery Score", fontsize=9, color=TEXT_DIM)
+    _style_ax(ax1, "Top Safety Components", NEON_BLUE)
 
-    # Panel 2: Safety heatmap (layer x type)
+    # ---- Panel 2: Heatmap ----
     ax2 = fig.add_subplot(gs[0, 1:])
-    ax2.set_facecolor("#0d1117")
+    matrix = np.zeros((len(comp_types), n_layers))
+    for li in range(n_layers):
+        for ti, ct in enumerate(comp_types):
+            matrix[ti, li] = layer_data.get(li, {}).get(ct, 0.0)
 
-    # Build heatmap data
-    layer_type_scores = {}
-    max_layer = 0
-    all_types = set()
-    for comp, score in avg_scores.items():
-        parts = comp.split("_")
-        for i, p in enumerate(parts):
-            if p == "layer" and i + 1 < len(parts) and parts[i + 1].isdigit():
-                layer_num = int(parts[i + 1])
-                comp_type = "_".join(parts[i + 2:])
-                prefix = "_".join(parts[:i]) if i > 0 else ""
-                if prefix:
-                    comp_type = f"{prefix}_{comp_type}"
-                layer_type_scores[(layer_num, comp_type)] = score
-                max_layer = max(max_layer, layer_num)
-                all_types.add(comp_type)
-                break
+    im = ax2.imshow(matrix, aspect="auto", cmap=CIRCUIT_CMAP,
+                     interpolation="bilinear")
+    ax2.set_yticks(range(len(comp_types)))
+    ax2.set_yticklabels(comp_types, fontsize=9, color=TEXT_WHITE)
+    step = max(1, n_layers // 15)
+    ax2.set_xticks(range(0, n_layers, step))
+    ax2.set_xticklabels([str(i) for i in range(0, n_layers, step)],
+                        fontsize=7, color=TEXT_DIM)
+    ax2.set_xlabel("Layer", fontsize=9, color=TEXT_DIM)
+    cb = plt.colorbar(im, ax=ax2, shrink=0.8)
+    cb.ax.tick_params(colors=TEXT_DIM, labelsize=7)
+    cb.set_label("Recovery Score", fontsize=8, color=TEXT_DIM)
+    _style_ax(ax2, "Safety Circuit Heatmap", NEON_CYAN)
 
-    types_sorted = sorted(all_types)
-    heatmap = np.zeros((len(types_sorted), max_layer + 1))
-    for (ln, ct), score in layer_type_scores.items():
-        ti = types_sorted.index(ct)
-        heatmap[ti, ln] = score
-
-    im = ax2.imshow(heatmap, aspect="auto", cmap=CIRCUIT_CMAP,
-                     interpolation="nearest")
-    ax2.set_xticks(range(0, max_layer + 1, max(1, max_layer // 10)))
-    ax2.set_yticks(range(len(types_sorted)))
-    ax2.set_yticklabels(types_sorted, fontsize=8, color="#c9d1d9")
-    ax2.set_xlabel("Layer", fontsize=9, color="#c9d1d9")
-    ax2.set_title("Safety Circuit Heatmap (Layer × Component Type)", fontsize=12,
-                   fontweight="bold", color="#58a6ff", pad=10)
-    ax2.tick_params(colors="#8b949e", labelsize=7)
-    plt.colorbar(im, ax=ax2, shrink=0.8, label="Recovery Score")
-
-    # Panel 3: Refusal direction norms
+    # ---- Panel 3: Refusal direction ----
     ax3 = fig.add_subplot(gs[1, 0])
-    ax3.set_facecolor("#0d1117")
+    rd_file = Path(results_dir) / f"refusal_direction_{model_tag}.json"
 
     if rd_file.exists():
         with open(rd_file) as f:
             rd_data = json.load(f)
-        norms = rd_data["direction_norms"]
-        items = sorted(norms.items(), key=lambda x: int(x[0].split("_")[-1])
+        norms = rd_data.get("direction_norms", {})
+        items = sorted(norms.items(),
+                       key=lambda x: int(x[0].split("_")[-1])
                        if x[0].split("_")[-1].isdigit() else 0)
-        rd_names = [k for k, _ in items]
+        rd_labels = [k for k, _ in items]
         rd_vals = [v for _, v in items]
-        rd_colors = [DANGER_CMAP(min(1.0, v / max(rd_vals) + 0.2)) for v in rd_vals]
+        rd_max = max(rd_vals) if rd_vals else 1
+        rd_colors = [DANGER_CMAP(min(1.0, v / rd_max * 0.7 + 0.3)) for v in rd_vals]
 
-        ax3.bar(range(len(rd_names)), rd_vals, color=rd_colors, width=0.7,
-                edgecolor="#30363d", linewidth=0.3)
-        ax3.set_xticks(range(0, len(rd_names), max(1, len(rd_names) // 8)))
-        ax3.set_xticklabels([rd_names[i] for i in range(0, len(rd_names),
-                             max(1, len(rd_names) // 8))],
-                            fontsize=6, color="#8b949e", rotation=45)
-    ax3.set_ylabel("Norm", fontsize=9, color="#c9d1d9")
-    ax3.set_title("Refusal Direction Strength", fontsize=12, fontweight="bold",
-                   color="#f85149", pad=10)
-    _style_ax(ax3)
+        ax3.bar(range(len(rd_labels)), rd_vals, color=rd_colors, width=0.7,
+                edgecolor=GRID_DIM, linewidth=0.3)
+        step3 = max(1, len(rd_labels) // 10)
+        ax3.set_xticks(range(0, len(rd_labels), step3))
+        ax3.set_xticklabels([rd_labels[i] for i in range(0, len(rd_labels), step3)],
+                            fontsize=6, color=TEXT_DIM, rotation=45, ha="right")
+        ax3.set_ylabel("Norm", fontsize=9, color=TEXT_DIM)
+    _style_ax(ax3, "Refusal Direction Strength", NEON_PINK)
 
-    # Panel 4: Per-type comparison
+    # ---- Panel 4: Per-type comparison ----
     ax4 = fig.add_subplot(gs[1, 1])
-    ax4.set_facecolor("#0d1117")
-
     type_scores = {}
-    for exp in patch_data:
+    for exp in data:
         ct = exp.get("counterfactual_type", "unknown")
         for r in exp["results"]:
             type_scores.setdefault(ct, {}).setdefault(r["component"], []).append(
                 r["recovery_score"])
 
-    type_avgs = {}
+    type_colors_map = {
+        "text_counterfactual": NEON_BLUE,
+        "image_counterfactual": NEON_ORANGE,
+        "typographic_attack": NEON_PURPLE,
+        "unknown": TEXT_DIM,
+    }
+
     for ct, comps in type_scores.items():
-        type_avgs[ct] = {k: np.mean(v) for k, v in comps.items()}
+        avg = {k: np.mean(v) for k, v in comps.items()}
+        top10 = sorted(avg.items(), key=lambda x: x[1], reverse=True)[:10]
+        x = range(len(top10))
+        y = [s for _, s in top10]
+        color = type_colors_map.get(ct, TEXT_DIM)
+        ax4.plot(x, y, "o-", color=color, linewidth=2, markersize=5,
+                 label=ct.replace("_", " "), alpha=0.85)
 
-    type_colors = {"text_counterfactual": "#58a6ff", "image_counterfactual": "#f0883e",
-                   "typographic_attack": "#a371f7", "unknown": "#8b949e"}
+    ax4.legend(fontsize=8, facecolor=BG_PANEL, edgecolor=GRID_DIM,
+               labelcolor=TEXT_WHITE, loc="upper right")
+    ax4.set_xlabel("Component Rank", fontsize=9, color=TEXT_DIM)
+    ax4.set_ylabel("Recovery Score", fontsize=9, color=TEXT_DIM)
+    _style_ax(ax4, "Safety by Counterfactual Type", NEON_PURPLE)
 
-    for ct, comps in type_avgs.items():
-        top5 = sorted(comps.items(), key=lambda x: x[1], reverse=True)[:10]
-        x_vals = range(len(top5))
-        y_vals = [s for _, s in top5]
-        ax4.plot(x_vals, y_vals, "o-", color=type_colors.get(ct, "#8b949e"),
-                 label=ct.replace("_", " "), markersize=4, linewidth=1.5, alpha=0.8)
-
-    ax4.legend(fontsize=7, facecolor="#161b22", edgecolor="#30363d",
-               labelcolor="white", loc="upper right")
-    ax4.set_xlabel("Component Rank", fontsize=9, color="#c9d1d9")
-    ax4.set_ylabel("Recovery Score", fontsize=9, color="#c9d1d9")
-    ax4.set_title("Safety by Counterfactual Type", fontsize=12,
-                   fontweight="bold", color="#a371f7", pad=10)
-    _style_ax(ax4)
-
-    # Panel 5: Key metrics text box
+    # ---- Panel 5: Key metrics ----
     ax5 = fig.add_subplot(gs[1, 2])
-    ax5.set_facecolor("#161b22")
+    ax5.set_facecolor(BG_PANEL)
 
     n_comps = len(avg_scores)
-    n_safety = sum(1 for _, s in avg_scores.items() if s >= 0.05)
+    n_safety = sum(1 for s in avg_scores.values() if s >= 0.05)
     top_comp = sorted_comps[0] if sorted_comps else ("N/A", 0)
-    n_exps = len(patch_data)
+    n_exps = len(data)
 
-    text_lines = [
-        ("Total Components", f"{n_comps}"),
-        ("Safety-Critical (>0.05)", f"{n_safety}"),
-        ("Most Critical", f"{top_comp[0]} ({top_comp[1]:.3f})"),
-        ("Total Experiments", f"{n_exps}"),
-        ("Model", model_tag),
+    metrics = [
+        ("Model", model_tag, NEON_BLUE),
+        ("Total Components", str(n_comps), NEON_CYAN),
+        ("Safety-Critical (>0.05)", str(n_safety), NEON_GREEN),
+        ("Most Critical", f"{top_comp[0]}", ACCENT_GOLD),
+        ("  Score", f"{top_comp[1]:.4f}", ACCENT_GOLD),
+        ("Total Experiments", str(n_exps), NEON_PURPLE),
+        ("Layers", str(n_layers), NEON_ORANGE),
     ]
 
-    for i, (label, value) in enumerate(text_lines):
-        y = 0.85 - i * 0.15
-        ax5.text(0.1, y, label, transform=ax5.transAxes, fontsize=11,
-                 color="#8b949e", va="center")
-        ax5.text(0.9, y, value, transform=ax5.transAxes, fontsize=11,
-                 color="#58a6ff", fontweight="bold", va="center", ha="right")
+    for i, (label, value, color) in enumerate(metrics):
+        y = 0.90 - i * 0.12
+        ax5.text(0.05, y, label, transform=ax5.transAxes, fontsize=11,
+                 color=TEXT_DIM, va="center")
+        ax5.text(0.95, y, value, transform=ax5.transAxes, fontsize=11,
+                 color=color, fontweight="bold", va="center", ha="right")
 
-    ax5.set_title("Key Metrics", fontsize=12, fontweight="bold",
-                   color="#2ecc71", pad=10)
+    _style_ax(ax5, "Key Metrics", NEON_GREEN)
     ax5.axis("off")
 
     # Main title
     fig.suptitle(f"VLM Safety Circuit Analysis — {model_tag}",
-                 fontsize=20, fontweight="bold", color="white", y=0.98,
-                 path_effects=[pe.withStroke(linewidth=2, foreground="#1f6feb")])
+                 fontsize=24, fontweight="bold", color=TEXT_WHITE, y=0.98,
+                 path_effects=[pe.withStroke(linewidth=3, foreground=NEON_BLUE)])
 
     os.makedirs(output_dir, exist_ok=True)
     out_path = os.path.join(output_dir, f"dashboard_{model_tag}.png")
-    fig.savefig(out_path, facecolor="#0d1117", edgecolor="none")
+    fig.savefig(out_path, facecolor=BG_DARK, edgecolor="none")
     plt.close(fig)
     print(f"  Saved: {out_path}")
     return out_path
-
-
-def _style_ax(ax):
-    """Apply dark theme styling to an axis."""
-    ax.tick_params(colors="#8b949e", labelsize=7)
-    ax.spines["bottom"].set_color("#30363d")
-    ax.spines["left"].set_color("#30363d")
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
 
 
 # ---------------------------------------------------------------------------
@@ -790,9 +1036,11 @@ def main():
 
     for model in args.models:
         print(f"=== {model} ===")
-        create_circuit_activation_gif(args.results_dir, args.output_dir, model)
+        create_circuit_board_gif(args.results_dir, args.output_dir, model)
+        create_flowing_heatmap_gif(args.results_dir, args.output_dir, model)
         create_refusal_direction_gif(args.results_dir, args.output_dir, model)
-        create_compression_impact_gif(args.results_dir, args.output_dir, model)
+        create_compression_radar_gif(args.results_dir, args.output_dir, model)
+        create_compression_bar_race(args.results_dir, args.output_dir, model)
         create_summary_dashboard(args.results_dir, args.output_dir, model)
         print()
 

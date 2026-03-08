@@ -6,6 +6,7 @@ are responsible for safety/refusal behavior in Vision-Language Models.
 
 Supported models:
   - LLaVA family (via LlavaForConditionalGeneration) — includes TinyLLaVA
+  - LLaVA-NeXT / v1.6 (via LlavaNextForConditionalGeneration)
   - BLIP-VQA-base (Salesforce/blip-vqa-base via BlipForQuestionAnswering)
 
 Approach:
@@ -753,8 +754,18 @@ def load_model(model_name: str, device: str, dtype: str = "float16",
             model = model.to(device)
         processor = BlipProcessor.from_pretrained(model_name)
         tokenizer = processor.tokenizer
+    elif "llava-v1.6" in model_name.lower() or "llava-next" in model_name.lower():
+        # LLaVA-NeXT / v1.6 models (e.g., llava-v1.6-vicuna-13b-hf)
+        from transformers import LlavaNextForConditionalGeneration, AutoProcessor
+        model = LlavaNextForConditionalGeneration.from_pretrained(
+            model_name,
+            device_map=device,
+            **model_kwargs,
+        )
+        processor = AutoProcessor.from_pretrained(model_name)
+        tokenizer = getattr(processor, 'tokenizer', processor)
     else:
-        # LLaVA / TinyLLaVA
+        # LLaVA 1.5 / TinyLLaVA
         from transformers import LlavaForConditionalGeneration, AutoProcessor
         # TinyLLaVA has architecture mismatches when loading as LlavaForConditionalGeneration
         if "tinyllava" in model_name.lower():
@@ -792,7 +803,14 @@ def load_model(model_name: str, device: str, dtype: str = "float16",
 # ---------------------------------------------------------------------------
 
 def format_prompt(text: str, model_name: str) -> str:
-    if "llava" in model_name.lower():
+    if "llava-v1.6-vicuna" in model_name.lower():
+        # Vicuna v1.1 chat template for LLaVA-NeXT
+        return (
+            "A chat between a curious human and an artificial intelligence assistant. "
+            "The assistant gives helpful, detailed, and polite answers to the human's questions. "
+            f"USER: <image>\n{text} ASSISTANT:"
+        )
+    elif "llava" in model_name.lower():
         return f"USER: <image>\n{text}\nASSISTANT:"
     elif "blip" in model_name.lower():
         return text
