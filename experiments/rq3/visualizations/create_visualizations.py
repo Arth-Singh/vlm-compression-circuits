@@ -351,8 +351,8 @@ def create_circuit_board_gif(results_dir, output_dir, model_tag="llava-1.5-7b-hf
 
 def create_flowing_heatmap_gif(results_dir, output_dir, model_tag="llava-1.5-7b-hf"):
     """
-    Animated heatmap: a wave of activation flows from early to late layers.
-    Shows the recovery score as an energy field across the network.
+    Publication-quality animated heatmap: a scan wave reveals safety recovery
+    scores across transformer layers. White background, formal styling.
     """
     data, avg_scores = _load_patching(results_dir, model_tag)
     if avg_scores is None:
@@ -373,87 +373,106 @@ def create_flowing_heatmap_gif(results_dir, output_dir, model_tag="llava-1.5-7b-
         for ti, ct in enumerate(comp_types):
             matrix[ti, li] = layer_data.get(li, {}).get(ct, 0.0)
 
-    # Normalize
     abs_max = max(np.abs(matrix).max(), 1e-6)
+
+    # Publication colormap: white → light blue → deep blue → red for peaks
+    pub_cmap = LinearSegmentedColormap.from_list(
+        "pub_safety",
+        ["#ffffff", "#f0f4ff", "#c6dbef", "#6baed6", "#2171b5",
+         "#08519c", "#d73027", "#a50026"]
+    )
 
     frames = []
     n_frames = 60
-
-    fig_w, fig_h = 14, 6
-    dpi = 120
+    fig_w, fig_h = 12, 4.5
+    dpi = 150
 
     for frame_idx in range(n_frames):
-        t = frame_idx / (n_frames - 1)  # 0 → 1
+        t = frame_idx / (n_frames - 1)
 
         fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=dpi)
-        fig.patch.set_facecolor(BG_DARK)
-        ax.set_facecolor(BG_DARK)
+        fig.patch.set_facecolor("white")
+        ax.set_facecolor("white")
 
-        # Create masked matrix — wave front sweeps across
-        wave_pos = t * (n_layers + 10)  # wave position in layer units
+        # Wave front sweeps across layers
+        wave_pos = t * (n_layers + 8)
         display = np.zeros_like(matrix)
 
         for li in range(n_layers):
-            # Gaussian envelope around wave front
             dist = li - wave_pos
-            # Show everything behind the wave, dim things far ahead
             if dist < 0:
-                # Behind wave — fully revealed
                 envelope = 1.0
-            elif dist < 5:
-                # At wave front — bright glow
-                envelope = np.exp(-0.5 * (dist / 1.5) ** 2)
+            elif dist < 4:
+                envelope = np.exp(-0.5 * (dist / 1.2) ** 2)
             else:
-                # Ahead of wave — barely visible
-                envelope = 0.02
+                envelope = 0.0
 
             display[:, li] = matrix[:, li] * envelope
 
-        # Plot heatmap with custom colormap
-        im = ax.imshow(display, aspect="auto", cmap=CIRCUIT_CMAP,
-                        vmin=-abs_max * 0.2, vmax=abs_max,
+        im = ax.imshow(display, aspect="auto", cmap=pub_cmap,
+                        vmin=0, vmax=abs_max,
                         interpolation="bilinear")
 
-        # Wave front indicator
+        # Wave front line
         if 0 <= wave_pos < n_layers:
-            ax.axvline(x=wave_pos, color=NEON_CYAN, alpha=0.6,
-                       linewidth=2, linestyle="--")
+            ax.axvline(x=wave_pos, color="#d73027", alpha=0.7,
+                       linewidth=1.5, linestyle="--")
 
-        # Labels
+        # Formal labels
         ax.set_yticks(range(len(comp_types)))
-        ax.set_yticklabels(comp_types, fontsize=9, color=TEXT_WHITE)
+        type_labels = {"attn": "Self-Attention", "mlp": "MLP",
+                       "crossattn": "Cross-Attention",
+                       "enc_attn": "Enc. Self-Attn", "enc_mlp": "Enc. MLP",
+                       "enc_crossattn": "Enc. Cross-Attn",
+                       "dec_attn": "Dec. Self-Attn", "dec_mlp": "Dec. MLP",
+                       "dec_crossattn": "Dec. Cross-Attn"}
+        ax.set_yticklabels([type_labels.get(ct, ct) for ct in comp_types],
+                           fontsize=10, color="#1a1a1a")
 
-        # X-axis: show every 5th layer
         step = max(1, n_layers // 15)
         ax.set_xticks(range(0, n_layers, step))
         ax.set_xticklabels([str(i) for i in range(0, n_layers, step)],
-                           fontsize=8, color=TEXT_DIM)
-        ax.set_xlabel("Layer", fontsize=10, color=TEXT_DIM)
+                           fontsize=9, color="#333333")
+        ax.set_xlabel("Transformer Layer", fontsize=11, color="#1a1a1a",
+                       fontfamily="serif")
+        ax.set_ylabel("Component Type", fontsize=11, color="#1a1a1a",
+                       fontfamily="serif")
 
         # Title
-        ax.text(0.5, 1.08, f"Safety Recovery Score — {model_tag}",
-                ha="center", va="bottom", fontsize=18, fontweight="bold",
-                color=TEXT_WHITE, transform=ax.transAxes,
-                path_effects=[pe.withStroke(linewidth=2, foreground=NEON_BLUE)])
-
+        model_display = model_tag.replace("-", " ").replace("hf", "").strip()
         pct = min(100, int(t * 100))
-        ax.text(0.5, 1.02, f"Scanning layers... {pct}%",
-                ha="center", va="bottom", fontsize=10, color=NEON_CYAN,
-                transform=ax.transAxes, alpha=0.8)
+        ax.set_title(
+            f"Activation Patching Recovery Score by Layer — {model_display}",
+            fontsize=13, fontweight="bold", color="#1a1a1a",
+            fontfamily="serif", pad=12)
 
+        # Progress indicator (subtle)
+        ax.text(0.99, 1.02, f"{pct}%",
+                ha="right", va="bottom", fontsize=9,
+                color="#999999", transform=ax.transAxes,
+                fontstyle="italic")
+
+        # Colorbar
+        cb = plt.colorbar(im, ax=ax, shrink=0.85, pad=0.02)
+        cb.set_label("Recovery Score", fontsize=10, color="#333333",
+                      fontfamily="serif")
+        cb.ax.tick_params(colors="#333333", labelsize=8)
+
+        # Clean spines
         for spine in ax.spines.values():
-            spine.set_color(GRID_DIM)
-        ax.tick_params(colors=TEXT_DIM)
+            spine.set_color("#cccccc")
+            spine.set_linewidth(0.5)
+        ax.tick_params(colors="#333333", width=0.5)
 
-        plt.tight_layout(rect=[0, 0, 1, 0.95])
+        plt.tight_layout(rect=[0, 0, 1, 0.98])
         fig.canvas.draw()
         w, h = fig.canvas.get_width_height()
         buf = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8).reshape(h, w, 4)
         frames.append(buf[:, :, :3].copy())
         plt.close(fig)
 
-    # Hold final
-    for _ in range(15):
+    # Hold final frame
+    for _ in range(20):
         frames.append(frames[-1])
 
     os.makedirs(output_dir, exist_ok=True)
