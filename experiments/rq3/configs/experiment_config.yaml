@@ -1,0 +1,46 @@
+# Experiment 1: Safety Circuit Discovery in VLMs
+# Config for activation patching experiments
+
+model:
+  # Primary model for safety experiments
+  name: "llava-hf/llava-1.5-7b-hf"
+  # Alternative: "Salesforce/blip2-opt-2.7b" for BLIP-2
+  dtype: "float16"
+  device: "auto"  # auto-detect GPU/CPU
+
+patching:
+  # Components to patch
+  components:
+    - "attention_heads"   # Individual attention heads per layer
+    - "mlp_layers"        # Full MLP blocks per layer
+    - "projector"         # Vision-language projector (cross-modal bridge)
+
+  # Patching method: "activation" (swap clean activation into corrupted run)
+  method: "activation"
+
+  # Metric to measure: probability of refusal tokens
+  metric: "refusal_probability"
+
+  # Refusal tokens — tokens that indicate model is refusing
+  refusal_prefixes:
+    - "I cannot"
+    - "I can't"
+    - "Sorry"
+    - "I apologize"
+    - "I'm not able"
+    - "As an AI"
+    - "I'm sorry"
+    - "I must decline"
+    - "It would be inappropriate"
+    - "I won't"
+
+data:
+  prompts_file: "data/safety_prompts.json"
+  # Will generate simple colored images as placeholders
+  # Replace with real images for full experiments
+  use_placeholder_images: true
+
+output:
+  results_dir: "results/"
+  save_activations: false  # Set true if you want to cache (large!)
+  save_plots: true
