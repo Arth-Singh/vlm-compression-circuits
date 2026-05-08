@@ -33,3 +33,20 @@ Thumbs.db
 
 # Temp
 experiments/rq3/results_server/
+
+# Secrets & private artifacts
+Arth_key
+*_key
+*.pem
+.env
+
+# Local-only / out-of-scope artifacts
+RQ3_Plan.html
+RQ3_Plan.pdf
+RQ3_Plan_styled.html
+GPU.txt
+aim_gpu.txt
+group-chat.txt
+*.gif
+Circuits for Compression V0.pdf
+paper-2/

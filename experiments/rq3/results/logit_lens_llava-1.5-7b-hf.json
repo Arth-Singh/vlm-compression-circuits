@@ -1,0 +1,315 @@
+{
+  "model": "llava-hf/llava-1.5-7b-hf",
+  "n_entries": 149,
+  "n_layers": 32,
+  "divergence_layer": 8,
+  "divergence_threshold": -0.0,
+  "refusal_token_ids": [
+    29871,
+    6225,
+    306,
+    1939,
+    11511,
+    8221
+  ],
+  "compliance_token_ids": [
+    450,
+    1763,
+    29871,
+    3824,
+    16696,
+    18585,
+    2266,
+    3869
+  ],
+  "layer_summary": [
+    {
+      "layer": 0,
+      "harmful_refusal_prob": 1.5e-05,
+      "benign_refusal_prob": 1.6e-05,
+      "refusal_prob_gap": -1e-06,
+      "harmful_logit_diff": -1.0245,
+      "benign_logit_diff": -0.9937,
+      "logit_diff_gap": -0.0307
+    },
+    {
+      "layer": 1,
+      "harmful_refusal_prob": 2.4e-05,
+      "benign_refusal_prob": 2.5e-05,
+      "refusal_prob_gap": -1e-06,
+      "harmful_logit_diff": -1.0082,
+      "benign_logit_diff": -0.9818,
+      "logit_diff_gap": -0.0264
+    },
+    {
+      "layer": 2,
+      "harmful_refusal_prob": 8.4e-05,
+      "benign_refusal_prob": 8.7e-05,
+      "refusal_prob_gap": -3e-06,
+      "harmful_logit_diff": -0.5866,
+      "benign_logit_diff": -0.5958,
+      "logit_diff_gap": 0.0092
+    },
+    {
+      "layer": 3,
+      "harmful_refusal_prob": 6.7e-05,
+      "benign_refusal_prob": 7e-05,
+      "refusal_prob_gap": -3e-06,
+      "harmful_logit_diff": -0.7335,
+      "benign_logit_diff": -0.7375,
+      "logit_diff_gap": 0.004
+    },
+    {
+      "layer": 4,
+      "harmful_refusal_prob": 0.000102,
+      "benign_refusal_prob": 0.000105,
+      "refusal_prob_gap": -4e-06,
+      "harmful_logit_diff": -0.3407,
+      "benign_logit_diff": -0.3102,
+      "logit_diff_gap": -0.0305
+    },
+    {
+      "layer": 5,
+      "harmful_refusal_prob": 0.000109,
+      "benign_refusal_prob": 0.000112,
+      "refusal_prob_gap": -2e-06,
+      "harmful_logit_diff": -0.9579,
+      "benign_logit_diff": -0.9467,
+      "logit_diff_gap": -0.0112
+    },
+    {
+      "layer": 6,
+      "harmful_refusal_prob": 6.3e-05,
+      "benign_refusal_prob": 6.4e-05,
+      "refusal_prob_gap": -1e-06,
+      "harmful_logit_diff": -1.4344,
+      "benign_logit_diff": -1.4306,
+      "logit_diff_gap": -0.0038
+    },
+    {
+      "layer": 7,
+      "harmful_refusal_prob": 0.000103,
+      "benign_refusal_prob": 0.000108,
+      "refusal_prob_gap": -5e-06,
+      "harmful_logit_diff": -0.9898,
+      "benign_logit_diff": -0.9219,
+      "logit_diff_gap": -0.0679
+    },
+    {
+      "layer": 8,
+      "harmful_refusal_prob": 0.000149,
+      "benign_refusal_prob": 0.000146,
+      "refusal_prob_gap": 2e-06,
+      "harmful_logit_diff": -0.9139,
+      "benign_logit_diff": -0.9324,
+      "logit_diff_gap": 0.0185
+    },
+    {
+      "layer": 9,
+      "harmful_refusal_prob": 0.000211,
+      "benign_refusal_prob": 0.000209,
+      "refusal_prob_gap": 2e-06,
+      "harmful_logit_diff": -0.529,
+      "benign_logit_diff": -0.4868,
+      "logit_diff_gap": -0.0422
+    },
+    {
+      "layer": 10,
+      "harmful_refusal_prob": 0.000212,
+      "benign_refusal_prob": 0.000201,
+      "refusal_prob_gap": 1.1e-05,
+      "harmful_logit_diff": -0.6641,
+      "benign_logit_diff": -0.65,
+      "logit_diff_gap": -0.0141
+    },
+    {
+      "layer": 11,
+      "harmful_refusal_prob": 0.00048,
+      "benign_refusal_prob": 0.000443,
+      "refusal_prob_gap": 3.7e-05,
+      "harmful_logit_diff": -0.2231,
+      "benign_logit_diff": -0.2292,
+      "logit_diff_gap": 0.0061
+    },
+    {
+      "layer": 12,
+      "harmful_refusal_prob": 0.000357,
+      "benign_refusal_prob": 0.00035,
+      "refusal_prob_gap": 7e-06,
+      "harmful_logit_diff": -0.1989,
+      "benign_logit_diff": -0.1523,
+      "logit_diff_gap": -0.0467
+    },
+    {
+      "layer": 13,
+      "harmful_refusal_prob": 0.000342,
+      "benign_refusal_prob": 0.000334,
+      "refusal_prob_gap": 7e-06,
+      "harmful_logit_diff": -0.6414,
+      "benign_logit_diff": -0.5333,
+      "logit_diff_gap": -0.1081
+    },
+    {
+      "layer": 14,
+      "harmful_refusal_prob": 0.000727,
+      "benign_refusal_prob": 0.000773,
+      "refusal_prob_gap": -4.6e-05,
+      "harmful_logit_diff": -0.3438,
+      "benign_logit_diff": -0.2833,
+      "logit_diff_gap": -0.0605
+    },
+    {
+      "layer": 15,
+      "harmful_refusal_prob": 0.000703,
+      "benign_refusal_prob": 0.000687,
+      "refusal_prob_gap": 1.6e-05,
+      "harmful_logit_diff": -0.6584,
+      "benign_logit_diff": -0.5325,
+      "logit_diff_gap": -0.1259
+    },
+    {
+      "layer": 16,
+      "harmful_refusal_prob": 0.000968,
+      "benign_refusal_prob": 0.001064,
+      "refusal_prob_gap": -9.6e-05,
+      "harmful_logit_diff": -0.4491,
+      "benign_logit_diff": -0.3596,
+      "logit_diff_gap": -0.0895
+    },
+    {
+      "layer": 17,
+      "harmful_refusal_prob": 0.000675,
+      "benign_refusal_prob": 0.000811,
+      "refusal_prob_gap": -0.000136,
+      "harmful_logit_diff": -0.5679,
+      "benign_logit_diff": -0.4695,
+      "logit_diff_gap": -0.0983
+    },
+    {
+      "layer": 18,
+      "harmful_refusal_prob": 0.000739,
+      "benign_refusal_prob": 0.001142,
+      "refusal_prob_gap": -0.000403,
+      "harmful_logit_diff": -0.6399,
+      "benign_logit_diff": -0.5138,
+      "logit_diff_gap": -0.1261
+    },
+    {
+      "layer": 19,
+      "harmful_refusal_prob": 0.000679,
+      "benign_refusal_prob": 0.001413,
+      "refusal_prob_gap": -0.000734,
+      "harmful_logit_diff": -0.769,
+      "benign_logit_diff": -0.6072,
+      "logit_diff_gap": -0.1618
+    },
+    {
+      "layer": 20,
+      "harmful_refusal_prob": 0.000574,
+      "benign_refusal_prob": 0.001173,
+      "refusal_prob_gap": -0.000599,
+      "harmful_logit_diff": -0.6875,
+      "benign_logit_diff": -0.5492,
+      "logit_diff_gap": -0.1384
+    },
+    {
+      "layer": 21,
+      "harmful_refusal_prob": 0.000522,
+      "benign_refusal_prob": 0.001163,
+      "refusal_prob_gap": -0.000641,
+      "harmful_logit_diff": -0.7286,
+      "benign_logit_diff": -0.5449,
+      "logit_diff_gap": -0.1837
+    },
+    {
+      "layer": 22,
+      "harmful_refusal_prob": 0.000575,
+      "benign_refusal_prob": 0.000936,
+      "refusal_prob_gap": -0.000361,
+      "harmful_logit_diff": -0.764,
+      "benign_logit_diff": -0.6116,
+      "logit_diff_gap": -0.1524
+    },
+    {
+      "layer": 23,
+      "harmful_refusal_prob": 0.000412,
+      "benign_refusal_prob": 0.000656,
+      "refusal_prob_gap": -0.000244,
+      "harmful_logit_diff": -0.8722,
+      "benign_logit_diff": -0.7107,
+      "logit_diff_gap": -0.1616
+    },
+    {
+      "layer": 24,
+      "harmful_refusal_prob": 0.00029,
+      "benign_refusal_prob": 0.000434,
+      "refusal_prob_gap": -0.000144,
+      "harmful_logit_diff": -0.831,
+      "benign_logit_diff": -0.6657,
+      "logit_diff_gap": -0.1653
+    },
+    {
+      "layer": 25,
+      "harmful_refusal_prob": 0.000236,
+      "benign_refusal_prob": 0.000443,
+      "refusal_prob_gap": -0.000207,
+      "harmful_logit_diff": -1.0226,
+      "benign_logit_diff": -0.852,
+      "logit_diff_gap": -0.1706
+    },
+    {
+      "layer": 26,
+      "harmful_refusal_prob": 0.000256,
+      "benign_refusal_prob": 0.000476,
+      "refusal_prob_gap": -0.000221,
+      "harmful_logit_diff": -1.0629,
+      "benign_logit_diff": -0.9022,
+      "logit_diff_gap": -0.1607
+    },
+    {
+      "layer": 27,
+      "harmful_refusal_prob": 0.000265,
+      "benign_refusal_prob": 0.000627,
+      "refusal_prob_gap": -0.000361,
+      "harmful_logit_diff": -1.0262,
+      "benign_logit_diff": -0.8564,
+      "logit_diff_gap": -0.1698
+    },
+    {
+      "layer": 28,
+      "harmful_refusal_prob": 0.000206,
+      "benign_refusal_prob": 0.001058,
+      "refusal_prob_gap": -0.000852,
+      "harmful_logit_diff": -1.3453,
+      "benign_logit_diff": -1.1156,
+      "logit_diff_gap": -0.2297
+    },
+    {
+      "layer": 29,
+      "harmful_refusal_prob": 0.000162,
+      "benign_refusal_prob": 0.001554,
+      "refusal_prob_gap": -0.001393,
+      "harmful_logit_diff": -1.6397,
+      "benign_logit_diff": -1.3752,
+      "logit_diff_gap": -0.2645
+    },
+    {
+      "layer": 30,
+      "harmful_refusal_prob": 0.000141,
+      "benign_refusal_prob": 0.002244,
+      "refusal_prob_gap": -0.002103,
+      "harmful_logit_diff": -1.4138,
+      "benign_logit_diff": -1.1348,
+      "logit_diff_gap": -0.279
+    },
+    {
+      "layer": 31,
+      "harmful_refusal_prob": 0.000396,
+      "benign_refusal_prob": 0.001532,
+      "refusal_prob_gap": -0.001136,
+      "harmful_logit_diff": -1.1738,
+      "benign_logit_diff": -0.9568,
+      "logit_diff_gap": -0.217
+    }
+  ]
+}

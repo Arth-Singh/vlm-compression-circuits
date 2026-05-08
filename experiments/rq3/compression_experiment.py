@@ -194,14 +194,17 @@ def apply_random_pruning(model, component_map: dict, sparsity: float):
     return pruned_count, total_count
 
 
-def apply_wanda_pruning(model, processor, component_map: dict, sparsity: float,
-                        calibration_data: list, dataset_dir: Path, device: str,
-                        model_name: str):
+def compute_wanda_activation_norms(model, processor, component_map: dict,
+                                   calibration_data: list, dataset_dir: Path,
+                                   device: str, model_name: str,
+                                   n_calib: int = 32) -> dict:
     """
-    Wanda pruning: prune by |weight| × ||activation||.
-    Uses calibration data to estimate activation magnitudes.
+    Run one calibration sweep and return per-component activation RMS norms.
+
+    Pulled out of apply_wanda_pruning so a single pass can be reused across
+    multiple sparsity levels — the norms depend only on the model + data, not
+    on sparsity, so recomputing them per level is pure waste.
     """
-    # Step 1: Collect activation norms per component via hooks
     activation_norms = {}
     hooks = []
 
@@ -215,7 +218,6 @@ def apply_wanda_pruning(model, processor, component_map: dict, sparsity: float,
                 act = output
             else:
                 return
-            # RMS norm across batch and sequence
             norm = act.float().pow(2).mean(dim=(0, 1)).sqrt()
             if name in activation_norms:
                 activation_norms[name] = activation_norms[name] + norm
@@ -227,8 +229,7 @@ def apply_wanda_pruning(model, processor, component_map: dict, sparsity: float,
         h = module.register_forward_hook(make_norm_hook(comp_name))
         hooks.append(h)
 
-    # Step 2: Run calibration forward passes
-    n_calib = min(len(calibration_data), 32)
+    n_calib = min(len(calibration_data), n_calib)
     with torch.inference_mode():
         for entry in calibration_data[:n_calib]:
             if entry.get("id") in SKIP_ENTRIES:
@@ -247,11 +248,15 @@ def apply_wanda_pruning(model, processor, component_map: dict, sparsity: float,
     for h in hooks:
         h.remove()
 
-    # Average activation norms
     for k in activation_norms:
         activation_norms[k] = activation_norms[k] / n_calib
 
-    # Step 3: Prune by |weight| × activation_norm
+    return activation_norms
+
+
+def apply_wanda_with_norms(model, component_map: dict, sparsity: float,
+                           activation_norms: dict):
+    """Apply Wanda pruning given precomputed activation norms."""
     pruned_count = 0
     total_count = 0
 
@@ -264,7 +269,6 @@ def apply_wanda_pruning(model, processor, component_map: dict, sparsity: float,
         for param_name, param in params:
             total_count += param.numel()
             with torch.no_grad():
-                # Wanda score: |W| × ||X|| for each output neuron
                 if param.dim() == 2 and act_norm.numel() == param.shape[1]:
                     importance = param.abs() * act_norm.unsqueeze(0).to(param.device)
                 else:
@@ -280,6 +284,18 @@ def apply_wanda_pruning(model, processor, component_map: dict, sparsity: float,
                 pruned_count += (mask == 0).sum().item()
 
     return pruned_count, total_count
+
+
+def apply_wanda_pruning(model, processor, component_map: dict, sparsity: float,
+                        calibration_data: list, dataset_dir: Path, device: str,
+                        model_name: str):
+    """One-shot Wanda: compute norms + prune. Kept for callers that don't
+    sweep sparsity (compression_experiment.py, single-shot tests)."""
+    norms = compute_wanda_activation_norms(
+        model, processor, component_map,
+        calibration_data, dataset_dir, device, model_name,
+    )
+    return apply_wanda_with_norms(model, component_map, sparsity, norms)
 
 
 def apply_mixed_quantization(model, component_map: dict, safety_critical: set):

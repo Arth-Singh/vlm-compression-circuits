@@ -84,11 +84,56 @@ REFUSAL_PREFIXES = [
     "I won't", "I'm unable", "No,", "I refuse",
 ]
 
+# Token sets for logit difference metric (following NOTICE, NAACL 2025)
+REFUSAL_STARTERS = ["I", "Sorry", "No", "Unfortunately", "Apolog"]
+COMPLIANCE_STARTERS = ["Sure", "Here", "Step", "First", "To", "The", "Yes"]
+
+_logit_diff_cache = {}
+
+
+def _get_token_ids(tokenizer, words, cache_key):
+    """Get first-token IDs for a list of words, cached per tokenizer."""
+    if cache_key not in _logit_diff_cache:
+        ids = set()
+        for word in words:
+            for variant in [word, f" {word}", f"▁{word}"]:
+                toks = tokenizer.encode(variant, add_special_tokens=False)
+                if toks:
+                    ids.add(toks[0])
+        _logit_diff_cache[cache_key] = list(ids)
+    return _logit_diff_cache[cache_key]
+
+
+def compute_logit_difference(logits: torch.Tensor, tokenizer) -> float:
+    """
+    Logit difference metric for safety circuit analysis.
+    Following NOTICE (Golovanevsky et al., NAACL 2025) and best practices
+    from Zhang & Nanda (ICLR 2024).
+
+    LD = mean(logits[refusal_tokens]) - mean(logits[compliance_tokens])
+
+    Logit difference is linear in the residual stream, making it additively
+    decomposable across attention heads and MLPs — unlike probability-based
+    metrics which are non-linear and threshold-distorted.
+    """
+    last_logits = logits[0, -1, :].float()
+
+    refusal_ids = _get_token_ids(tokenizer, REFUSAL_STARTERS, "refusal")
+    compliance_ids = _get_token_ids(tokenizer, COMPLIANCE_STARTERS, "compliance")
+
+    if not refusal_ids or not compliance_ids:
+        return 0.0
+
+    refusal_logits = last_logits[refusal_ids].mean()
+    compliance_logits = last_logits[compliance_ids].mean()
+
+    return (refusal_logits - compliance_logits).item()
+
 
 def compute_refusal_probability(logits: torch.Tensor, tokenizer) -> float:
     """
-    For instruction-tuned models (LLaVA): sum probability of first tokens
-    of known refusal prefixes at the last position.
+    Legacy metric: sum probability of first tokens of refusal prefixes.
+    Kept for backward compatibility. Use compute_logit_difference() instead.
     """
     probs = F.softmax(logits[0, -1, :].float(), dim=-1)
 
@@ -496,13 +541,13 @@ class ActivationPatcher:
         corrupted_inputs = self.prepare_inputs(benign_text, benign_image)
         corrupted_logits, _ = self.forward_and_cache(corrupted_inputs, components)
 
-        # Compute baseline metrics
+        # Compute baseline metrics using logit difference (NOTICE, NAACL 2025)
         if self.is_blip_vqa:
             clean_metric = compute_output_divergence(clean_logits, corrupted_logits)
             corrupted_metric = 0.0
         else:
-            clean_metric = compute_refusal_probability(clean_logits, self.tokenizer)
-            corrupted_metric = compute_refusal_probability(corrupted_logits, self.tokenizer)
+            clean_metric = compute_logit_difference(clean_logits, self.tokenizer)
+            corrupted_metric = compute_logit_difference(corrupted_logits, self.tokenizer)
 
         metric_gap = clean_metric - corrupted_metric
 
@@ -515,7 +560,7 @@ class ActivationPatcher:
             if self.is_blip_vqa:
                 patched_metric = compute_output_divergence(patched_logits, corrupted_logits)
             else:
-                patched_metric = compute_refusal_probability(patched_logits, self.tokenizer)
+                patched_metric = compute_logit_difference(patched_logits, self.tokenizer)
 
             if abs(metric_gap) > 1e-6:
                 recovery = (patched_metric - corrupted_metric) / metric_gap
@@ -754,18 +799,22 @@ def load_model(model_name: str, device: str, dtype: str = "float16",
         processor = BlipProcessor.from_pretrained(model_name)
         tokenizer = processor.tokenizer
     else:
-        # LLaVA / TinyLLaVA
-        from transformers import LlavaForConditionalGeneration, AutoProcessor
-        # TinyLLaVA has architecture mismatches when loading as LlavaForConditionalGeneration
+        # LLaVA / LLaVA-Next / TinyLLaVA
+        from transformers import AutoProcessor
+        if "llava-v1.6" in model_name.lower() or "llava-next" in model_name.lower():
+            from transformers import LlavaNextForConditionalGeneration
+            model_cls = LlavaNextForConditionalGeneration
+        else:
+            from transformers import LlavaForConditionalGeneration
+            model_cls = LlavaForConditionalGeneration
         if "tinyllava" in model_name.lower():
             model_kwargs["ignore_mismatched_sizes"] = True
-        model = LlavaForConditionalGeneration.from_pretrained(
+        model = model_cls.from_pretrained(
             model_name,
             device_map=device,
             **model_kwargs,
         )
         processor = AutoProcessor.from_pretrained(model_name)
-        # TinyLLaVA processor is itself the tokenizer (CodeGenTokenizer)
         tokenizer = getattr(processor, 'tokenizer', processor)
 
     model.eval()
