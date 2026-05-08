@@ -1,12 +1,20 @@
 # Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+*.pth
 .venv/
 *.egg-info/
 
-# Data (images downloaded separately)
+# Data (large files downloaded separately)
 experiments/rq3/data/safety_dataset/images/
 experiments/rq3/data/.env
+data/
+output/
+src/compressed_models/
 
 # Archives
 *.tar.gz
@@ -21,6 +29,24 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+.cursor/
 
 # Temp
 experiments/rq3/results_server/
+
+# Secrets & private artifacts
+Arth_key
+*_key
+*.pem
+.env
+
+# Local-only / out-of-scope artifacts
+RQ3_Plan.html
+RQ3_Plan.pdf
+RQ3_Plan_styled.html
+GPU.txt
+aim_gpu.txt
+group-chat.txt
+*.gif
+Circuits for Compression V0.pdf
+paper-2/
